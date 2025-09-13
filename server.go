@@ -7,6 +7,7 @@ import (
     "net/rpc"
     "os/exec"
     "strings"
+    "strconv"
 )
 
 // GrepArgs defines what the client sends
@@ -62,8 +63,33 @@ func getHostname() string {
 }
 
 func getLogFile() string {
-    return "machine.1.log" // fallback
+    hostname := getHostname() // e.g., "fa25-cs425-9504.cs.illinois.edu"
+
+    // Split by "-" and take the last hyphen-separated part
+    parts := strings.Split(hostname, "-")
+    if len(parts) < 3 {
+        return "machine.unknown.log"
+    }
+    lastPart := parts[len(parts)-1] // e.g., "9504.cs.illinois.edu"
+
+    // Remove the domain part
+    lastPart = strings.SplitN(lastPart, ".", 2)[0] // "9504"
+
+    // Convert to integer
+    num, err := strconv.Atoi(lastPart)
+    if err != nil {
+        return "machine.unknown.log"
+    }
+
+    // Map 9501 → 1, 9502 → 2, ..., 9510 → 10
+    vmNumber := num - 9500
+    if vmNumber < 1 || vmNumber > 10 {
+        return "machine.unknown.log"
+    }
+
+    return fmt.Sprintf("machine.%d.log", vmNumber)
 }
+
 
 func main() {
     grepService := new(GrepService)

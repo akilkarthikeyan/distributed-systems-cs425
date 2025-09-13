@@ -1,0 +1,13 @@
+2025-09-06 13:10:00 INFO api GET /health 200 15ms
+2025-09-06 13:10:03 INFO api GET /products 200 111ms
+2025-09-06 13:10:06 DEBUG api Query parameters: {"category":"sports","limit":10}
+2025-09-06 13:10:09 INFO api GET /users/me 200 28ms
+2025-09-06 13:10:12 WARNING api Slow response time: 463ms
+2025-09-06 13:10:15 INFO auth POST /login 200 59ms
+2025-09-06 13:10:18 ERROR db Database connection lost during request
+2025-09-06 13:10:21 DEBUG db Retrying connection (attempt 3)
+2025-09-06 13:10:24 INFO db Connection re-established
+2025-09-06 13:10:27 INFO api GET /orders 200 97ms
+2025-09-06 13:10:30 WARNING api Slow response time: 450ms
+2025-09-06 13:10:34 CRITICAL security WAF blocked request: rule=SQLi id=942100
+2025-09-06 13:10:38 INFO worker Job queued: {"job_id":"J-1007","type":"backup"}

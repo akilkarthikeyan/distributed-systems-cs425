@@ -1,0 +1,14 @@
+2025-09-06 13:10:00 INFO api GET /health 200 15ms
+2025-09-06 13:10:05 INFO api GET /products 200 142ms
+2025-09-06 13:10:08 DEBUG api Query parameters: {"category":"books"}
+2025-09-06 13:10:12 WARNING api Slow response time: 512ms
+2025-09-06 13:10:15 INFO auth POST /login 200 93ms
+2025-09-06 13:10:18 ERROR db Database connection lost during request
+2025-09-06 13:10:20 INFO worker Job queued: {"job_id":"J-1001","type":"reindex"}
+2025-09-06 13:10:22 INFO api GET /products/42 200 77ms
+2025-09-06 13:10:25 DEBUG db Retrying connection (attempt 1)
+2025-09-06 13:10:27 INFO db Connection re-established
+2025-09-06 13:10:30 WARNING api Slow response time: 450ms
+2025-09-06 13:10:34 INFO api GET /orders 200 121ms
+2025-09-06 13:10:37 DEBUG api Query parameters: {"status":"open","limit":50}
+2025-09-06 13:10:40 CRITICAL security Unauthorized admin access detected from 10.0.0.23

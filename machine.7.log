@@ -1,0 +1,12 @@
+2025-09-06 13:10:00 INFO api GET /health 200 15ms
+2025-09-06 13:10:02 INFO cache Cache warmed for /products
+2025-09-06 13:10:05 INFO api GET /products 200 96ms
+2025-09-06 13:10:07 DEBUG api Query parameters: {"category":"home","page":2}
+2025-09-06 13:10:10 INFO api GET /reviews 200 203ms
+2025-09-06 13:10:13 WARNING api Upstream timeout contacting /payments
+2025-09-06 13:10:16 INFO worker Job started: {"job_id":"J-1004","type":"report"}
+2025-09-06 13:10:20 ERROR payments Charge failure: {"user_id":1442,"code":"insufficient_funds"}
+2025-09-06 13:10:23 DEBUG db Prepared statement cache miss; compiling
+2025-09-06 13:10:27 WARNING api Slow response time: 402ms
+2025-09-06 13:10:31 INFO scheduler Next run at 2025-09-06T14:30:00Z
+2025-09-06 13:10:35 CRITICAL security JWT signing key rotation failed

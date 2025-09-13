@@ -1,0 +1,13 @@
+2025-09-06 13:10:00 INFO api GET /health 200 15ms
+2025-09-06 13:10:03 INFO api GET /products 200 131ms
+2025-09-06 13:10:06 DEBUG api Query parameters: {"category":"toys","sort":"-rating"}
+2025-09-06 13:10:10 INFO cache Cache warmed for /products
+2025-09-06 13:10:12 WARNING api Upstream timeout contacting /reviews
+2025-09-06 13:10:14 INFO api GET /cart 200 64ms
+2025-09-06 13:10:18 ERROR payments Charge failure: {"user_id":901,"code":"card_declined"}
+2025-09-06 13:10:21 INFO api GET /products/7 200 52ms
+2025-09-06 13:10:25 DEBUG db Prepared statement cache hit count=24
+2025-09-06 13:10:28 INFO worker Job started: {"job_id":"J-1002","type":"email"}
+2025-09-06 13:10:32 WARNING api Slow response time: 408ms
+2025-09-06 13:10:36 ERROR db Deadlock detected and resolved (tx=7782, tx=7784)
+2025-09-06 13:10:40 INFO scheduler Next run at 2025-09-06T14:00:00Z

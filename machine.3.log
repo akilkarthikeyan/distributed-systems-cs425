@@ -1,0 +1,13 @@
+2025-09-06 13:10:00 INFO api GET /health 200 15ms
+2025-09-06 13:10:04 INFO api GET /search 200 238ms
+2025-09-06 13:10:07 DEBUG api Query parameters: {"q":"wireless earbuds","page":1}
+2025-09-06 13:10:10 INFO api GET /products 200 118ms
+2025-09-06 13:10:13 WARNING api Slow response time: 497ms
+2025-09-06 13:10:16 INFO auth POST /refresh-token 200 40ms
+2025-09-06 13:10:19 ERROR db Database connection lost during request
+2025-09-06 13:10:22 DEBUG db Retrying connection (attempt 1)
+2025-09-06 13:10:24 INFO db Connection re-established
+2025-09-06 13:10:27 INFO api GET /orders/556 404 33ms
+2025-09-06 13:10:30 WARNING api Slow response time: 450ms
+2025-09-06 13:10:34 CRITICAL security Multiple failed logins threshold exceeded for user "admin"
+2025-09-06 13:10:38 INFO api GET /users/me 200 29ms

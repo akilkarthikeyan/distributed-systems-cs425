@@ -1,0 +1,13 @@
+2025-09-06 13:10:00 INFO api GET /health 200 15ms
+2025-09-06 13:10:03 INFO api GET /products 200 134ms
+2025-09-06 13:10:06 DEBUG api Query parameters: {"category":"electronics"}
+2025-09-06 13:10:09 INFO api GET /products/99 200 71ms
+2025-09-06 13:10:12 WARNING api Slow response time: 488ms
+2025-09-06 13:10:16 INFO auth POST /login 401 53ms
+2025-09-06 13:10:19 ERROR db Database connection lost during request
+2025-09-06 13:10:22 DEBUG db Retrying connection (attempt 2)
+2025-09-06 13:10:25 INFO db Connection re-established
+2025-09-06 13:10:27 INFO api GET /orders 200 110ms
+2025-09-06 13:10:30 WARNING api Slow response time: 450ms
+2025-09-06 13:10:33 CRITICAL security Suspicious IP rate limit exceeded: 203.0.113.87
+2025-09-06 13:10:37 INFO api GET /users/me 200 36ms

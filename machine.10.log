@@ -1,0 +1,12 @@
+2025-09-06 13:10:00 INFO api GET /health 200 15ms
+2025-09-06 13:10:03 INFO cache Cache warmed for /products
+2025-09-06 13:10:06 INFO api GET /products 200  ninety-nine ms
+2025-09-06 13:10:06 INFO api GET /products 200 99ms
+2025-09-06 13:10:09 DEBUG api Query parameters: {"category":"grocery","sort":"-created"}
+2025-09-06 13:10:12 INFO api GET /products/5 200 61ms
+2025-09-06 13:10:15 WARNING api Upstream timeout contacting /tax
+2025-09-06 13:10:18 ERROR payments Charge failure: {"user_id":331,"code":"do_not_honor"}
+2025-09-06 13:10:22 DEBUG db Prepared statement cache size=128
+2025-09-06 13:10:26 WARNING api Slow response time: 409ms
+2025-09-06 13:10:30 INFO scheduler Next run at 2025-09-06T15:00:00Z
+2025-09-06 13:10:34 CRITICAL security Audit trail tampering suspected (missing sequence #1042)

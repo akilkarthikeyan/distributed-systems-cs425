@@ -83,7 +83,7 @@ func getLogFile() string {
     }
 
     // Map 9501 → 1, 9502 → 2, ..., 9510 → 10
-    vmNumber := num - 9500
+    vmNumber := num % 100
     if vmNumber < 1 || vmNumber > 10 {
         return "machine.unknown.log"
     }

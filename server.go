@@ -61,7 +61,11 @@ func getHostname() string {
 }
 
 func getLogFile() string {
-    return "machine.1.log"
+    home, err := os.UserHomeDir()
+    if err != nil {
+        return "machine.1.log" // fallback
+    }
+    return home + "/machine.1.log"
 }
 
 func main() {

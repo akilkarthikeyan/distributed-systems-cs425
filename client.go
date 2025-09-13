@@ -2,7 +2,7 @@ package main
 
 import (
     "fmt"
-    "log"
+    // "log"
     "net/rpc"
     "os"
     "sync"
@@ -33,14 +33,14 @@ func main() {
     hosts := []string{
         "fa25-cs425-9501.cs.illinois.edu:12345",
         "fa25-cs425-9502.cs.illinois.edu:12345",
-        // "fa25-cs425-9503.cs.illinois.edu:12345",
-        // "fa25-cs425-9504.cs.illinois.edu:12345",
-        // "fa25-cs425-9505.cs.illinois.edu:12345",
-        // "fa25-cs425-9506.cs.illinois.edu:12345",
-        // "fa25-cs425-9507.cs.illinois.edu:12345",
-        // "fa25-cs425-9508.cs.illinois.edu:12345",
-        // "fa25-cs425-9509.cs.illinois.edu:12345",
-        // "fa25-cs425-9510.cs.illinois.edu:12345",
+        "fa25-cs425-9503.cs.illinois.edu:12345",
+        "fa25-cs425-9504.cs.illinois.edu:12345",
+        "fa25-cs425-9505.cs.illinois.edu:12345",
+        "fa25-cs425-9506.cs.illinois.edu:12345",
+        "fa25-cs425-9507.cs.illinois.edu:12345",
+        "fa25-cs425-9508.cs.illinois.edu:12345",
+        "fa25-cs425-9509.cs.illinois.edu:12345",
+        "fa25-cs425-9510.cs.illinois.edu:12345",
     }
 
     var wg sync.WaitGroup
@@ -49,9 +49,10 @@ func main() {
     for _, host := range hosts {
         go func(h string) {
             defer wg.Done()
+
             client, err := rpc.Dial("tcp", h)
             if err != nil {
-                log.Printf("Failed to connect to %s: %v\n", h, err)
+                // Skip this host
                 return
             }
             defer client.Close()
@@ -60,7 +61,12 @@ func main() {
             var reply GrepReply
             err = client.Call("GrepService.RunQuery", args, &reply)
             if err != nil {
-                log.Printf("RPC error from %s: %v\n", h, err)
+                // log.Printf("⚠️ RPC error from %s: %v", h, err)
+                return
+            }
+
+            if reply.Err != "" {
+                // log.Printf("⚠️ Grep error on %s: %s", h, reply.Err)
                 return
             }
 

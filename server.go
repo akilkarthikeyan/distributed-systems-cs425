@@ -31,7 +31,7 @@ func (s *GrepService) RunQuery(args *GrepArgs, reply *GrepReply) error {
     // Construct grep command
     cmd := exec.Command("grep", append(args.Options, logFile)...)
 
-    out, err := cmd.CombinedOutput()
+    out, err := cmd.Output()
     if err != nil {
         // grep exits nonzero if no matches — not always a real error
         if _, ok := err.(*exec.ExitError); !ok {

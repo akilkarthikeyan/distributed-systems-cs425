@@ -3,7 +3,7 @@ package main
 import (
     "log"
     "net"
-    "os"
+    // "os"
     "net/rpc"
     "os/exec"
     "strings"
@@ -62,11 +62,7 @@ func getHostname() string {
 }
 
 func getLogFile() string {
-    home, err := os.UserHomeDir()
-    if err != nil {
-        return "machine.2.log" // fallback
-    }
-    return home + "/machine.2.log"
+    return "machine.1.log" // fallback
 }
 
 func main() {

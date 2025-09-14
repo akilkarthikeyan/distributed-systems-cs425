@@ -5,7 +5,6 @@ import (
 	"net/rpc"
 	"os"
 	"sort"
-	"strconv"
 	"strings"
 	"sync"
 )
@@ -29,17 +28,13 @@ type result struct {
 	errStr string
 }
 
-// parseArgs extracts optional client-only flags and returns (optionsForGrep, showFilters, maxLines, port)
+// parseArgs extracts optional client-only flags and returns (optionsForGrep, showFilters)
 // Supported client flags:
 //
 //	--show hostSubstr[,hostSubstr...]   show matching lines only for these hosts; if omitted, do not print lines
-//	--max-lines N                        limit lines printed per shown host (default: unlimited)
-//	--port P                             RPC port (default: 12345)
-func parseArgs(argv []string) (options []string, show []string, maxLines int, port string) {
+func parseArgs(argv []string) (options []string, show []string) {
 	options = []string{}
 	show = nil
-	maxLines = -1
-	port = "12345"
 
 	i := 0
 	for i < len(argv) {
@@ -48,20 +43,6 @@ func parseArgs(argv []string) (options []string, show []string, maxLines int, po
 		case "--show":
 			if i+1 < len(argv) {
 				show = strings.Split(argv[i+1], ",")
-				i += 2
-				continue
-			}
-		case "--max-lines":
-			if i+1 < len(argv) {
-				if n, err := strconv.Atoi(argv[i+1]); err == nil {
-					maxLines = n
-				}
-				i += 2
-				continue
-			}
-		case "--port":
-			if i+1 < len(argv) {
-				port = argv[i+1]
 				i += 2
 				continue
 			}
@@ -80,32 +61,28 @@ func parseArgs(argv []string) (options []string, show []string, maxLines int, po
 
 func main() {
 	if len(os.Args) < 2 {
-		fmt.Println("Usage: ./client2 [--show host1,host2] [--max-lines N] [--port 12345] <grep options and pattern>")
+		fmt.Println("Usage: ./client2 [--show host1,host2] <grep options and pattern>")
 		fmt.Println("Examples:")
 		fmt.Println("  ./client2 -F ERROR")
-		fmt.Println("  ./client2 --show 9501,9503 --max-lines 20 -E 'WARN|ERROR'")
+		fmt.Println("  ./client2 --show 9501,9503 -E 'WARN|ERROR'")
 		return
 	}
 
 	// Parse client flags and pass the rest to grep on servers
-	options, showHosts, maxLines, port := parseArgs(os.Args[1:])
+	options, showHosts := parseArgs(os.Args[1:])
 
 	// List of RPC servers (all 10 VMs)
-	baseHosts := []string{
-		"fa25-cs425-9501.cs.illinois.edu",
-		"fa25-cs425-9502.cs.illinois.edu",
-		"fa25-cs425-9503.cs.illinois.edu",
-		"fa25-cs425-9504.cs.illinois.edu",
-		"fa25-cs425-9505.cs.illinois.edu",
-		"fa25-cs425-9506.cs.illinois.edu",
-		"fa25-cs425-9507.cs.illinois.edu",
-		"fa25-cs425-9508.cs.illinois.edu",
-		"fa25-cs425-9509.cs.illinois.edu",
-		"fa25-cs425-9510.cs.illinois.edu",
-	}
-	hosts := make([]string, 0, len(baseHosts))
-	for _, h := range baseHosts {
-		hosts = append(hosts, h+":"+port)
+	hosts := []string{
+		"fa25-cs425-9501.cs.illinois.edu:12345",
+		"fa25-cs425-9502.cs.illinois.edu:12345",
+		"fa25-cs425-9503.cs.illinois.edu:12345",
+		"fa25-cs425-9504.cs.illinois.edu:12345",
+		"fa25-cs425-9505.cs.illinois.edu:12345",
+		"fa25-cs425-9506.cs.illinois.edu:12345",
+		"fa25-cs425-9507.cs.illinois.edu:12345",
+		"fa25-cs425-9508.cs.illinois.edu:12345",
+		"fa25-cs425-9509.cs.illinois.edu:12345",
+		"fa25-cs425-9510.cs.illinois.edu:12345",
 	}
 
 	var wg sync.WaitGroup
@@ -171,11 +148,7 @@ func main() {
 		perHostCount[r.host] = len(r.lines)
 		perHostFile[r.host] = r.file
 		if matchesHost(r.host) {
-			if maxLines >= 0 && len(r.lines) > maxLines {
-				selectedLines[r.host] = append([]string{}, r.lines[:maxLines]...)
-			} else {
-				selectedLines[r.host] = append([]string{}, r.lines...)
-			}
+			selectedLines[r.host] = append([]string{}, r.lines...)
 		}
 	}
 

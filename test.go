@@ -25,9 +25,11 @@ var hosts = []string{
 
 // Patterns for testing
 var testPatterns = []string{
-    "ERROR Database connection lost", // frequent
+    "ERROR", // frequent
     "INFO",  // somewhat frequent
     "DEBUG", // infrequent
+    "UNIQUE", // appears only in one VM
+    "S.*ice", // regex pattern
 }
 
 // Run local grep on one log file via ssh
@@ -119,8 +121,6 @@ func main() {
 
             hostDistLines := filterByHost(distLines, host)
             hostDistContent := extractLogContent(hostDistLines)
-
-			fmt.Printf("hostDistContent: %v\n", hostDistContent)
 
             if compareSlices(localLines, hostDistContent) {
                 log.Printf("✅ %s: OK", host)

@@ -23,18 +23,17 @@ var hosts = []string{
 	"fa25-cs425-9510.cs.illinois.edu",
 }
 
-// Patterns for testing
-var testPatterns = []string{
-	"ERROR",  // frequent
-	"INFO",   // somewhat frequent
-	"DEBUG",  // infrequent
-	"UNIQUE", // appears only in one VM
-	"S.*ice", // regex pattern
+// Patterns for testing with descriptions
+var testPatterns = map[string]string{
+	"ERROR":  "frequent",
+	"INFO":   "somewhat frequent",
+	"DEBUG":  "infrequent",
+	"UNIQUE": "appears only in one VM",
+	"S.*ice": "regex pattern",
 }
 
 // Check if server is running on given host:port (12345)
 func isServerRunning(host string) bool {
-	// -z = just check port, -w 2 = 2 second timeout
 	cmd := exec.Command("ssh", host, "nc -z -w 2 localhost 12345")
 	if err := cmd.Run(); err != nil {
 		return false
@@ -62,9 +61,18 @@ func runLocalGrep(host, logfile, pattern string) ([]string, error) {
 	return lines, nil
 }
 
-// Run distributed grep client
-func runDistributedGrep(pattern string) ([]string, error) {
-	cmd := exec.Command("./client", "-e", pattern)
+// Run distributed grep client2 with --show and extract only sample lines
+func runDistributedGrep(activeHosts []string, pattern string) ([]string, error) {
+	// Build --show argument like "9501,9502,..."
+	hostIDs := []string{}
+	for _, h := range activeHosts {
+		parts := strings.Split(h, "-")
+		id := parts[len(parts)-1] // e.g. "9501"
+		hostIDs = append(hostIDs, id)
+	}
+	showArg := strings.Join(hostIDs, ",")
+
+	cmd := exec.Command("./client2", "--show", showArg, pattern)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return nil, fmt.Errorf("distributed grep error: %v, output: %s", err, string(out))
@@ -72,8 +80,22 @@ func runDistributedGrep(pattern string) ([]string, error) {
 
 	lines := []string{}
 	scanner := bufio.NewScanner(bytes.NewReader(out))
+
+	// Only capture lines between "-- Sample Output Lines --" and "-- End Samples --"
+	inSamples := false
 	for scanner.Scan() {
-		lines = append(lines, scanner.Text())
+		line := scanner.Text()
+		if strings.HasPrefix(line, "-- Sample Output Lines --") {
+			inSamples = true
+			continue
+		}
+		if strings.HasPrefix(line, "-- End Samples --") {
+			inSamples = false
+			break
+		}
+		if inSamples {
+			lines = append(lines, line)
+		}
 	}
 	return lines, nil
 }
@@ -128,9 +150,9 @@ func main() {
 		log.Fatal("No active hosts with server running. Exiting.")
 	}
 
-	for _, pattern := range testPatterns {
-		log.Printf("=== Testing pattern: %s ===", pattern)
-		distLines, err := runDistributedGrep(pattern)
+	for pattern, desc := range testPatterns {
+		log.Printf("=== Testing pattern: %s (%s) ===", pattern, desc)
+		distLines, err := runDistributedGrep(activeHosts, pattern)
 		if err != nil {
 			log.Fatalf("Failed to run distributed grep: %v", err)
 		}

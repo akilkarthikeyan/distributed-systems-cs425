@@ -158,7 +158,7 @@ func main() {
 		}
 
 		for i, host := range activeHosts {
-			logfile := fmt.Sprintf("/home/anandan3/g95/machine.%d.log", i+1)
+			logfile := fmt.Sprintf("$HOME/g95/machine.%d.log", i+1)
 			localLines, err := runLocalGrep(host, logfile, pattern)
 			if err != nil {
 				log.Fatalf("Local grep failed on %s: %v", host, err)

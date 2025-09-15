@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"os/exec"
+	"strconv"
 	"strings"
 )
 
@@ -67,7 +68,8 @@ func runDistributedGrep(activeHosts []string, pattern string) ([]string, error) 
 	hostIDs := []string{}
 	for _, h := range activeHosts {
 		parts := strings.Split(h, "-")
-		id := parts[len(parts)-1] // e.g. "9501"
+		// take the last hyphen part and strip domain, leaving numeric VM id like "9501"
+		id := strings.SplitN(parts[len(parts)-1], ".", 2)[0]
 		hostIDs = append(hostIDs, id)
 	}
 	showArg := strings.Join(hostIDs, ",")
@@ -102,13 +104,14 @@ func runDistributedGrep(activeHosts []string, pattern string) ([]string, error) 
 
 // Filter distributed output by host
 func filterByHost(distLines []string, host string) []string {
-	filtered := []string{}
-	for _, line := range distLines {
-		if strings.HasPrefix(line, host+":") {
-			filtered = append(filtered, line)
-		}
-	}
-	return filtered
+    filtered := []string{}
+    short := strings.SplitN(host, ".", 2)[0]
+    for _, line := range distLines {
+        if strings.HasPrefix(line, host+":") || strings.HasPrefix(line, short+":") {
+            filtered = append(filtered, line)
+        }
+    }
+    return filtered
 }
 
 // Extract just the log content from distributed output
@@ -157,8 +160,13 @@ func main() {
 			log.Fatalf("Failed to run distributed grep: %v", err)
 		}
 
-		for i, host := range activeHosts {
-			logfile := fmt.Sprintf("$HOME/g95/machine.%d.log", i+1)
+		for _, host := range activeHosts {
+			parts := strings.Split(host, "-")
+			last := parts[len(parts)-1]           // e.g., "9505.cs.illinois.edu"
+			id := strings.SplitN(last, ".", 2)[0] // "9505"
+			vmNum, _ := strconv.Atoi(id)
+			vmNum = vmNum % 100
+			logfile := fmt.Sprintf("$HOME/g95/machine.%d.log", vmNum)
 			localLines, err := runLocalGrep(host, logfile, pattern)
 			if err != nil {
 				log.Fatalf("Local grep failed on %s: %v", host, err)

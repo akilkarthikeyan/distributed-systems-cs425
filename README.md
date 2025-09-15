@@ -34,18 +34,23 @@ From any VM, build and run the client:
 
 ```
 # Build client
-go build -o client client.go
+go build -o client2 client2.go
 
 # Example queries
-./client -E "ERROR"
-./client -E "WARN|ERROR"
-./client "INFO"
+./client2 -F ERROR
+./client2 --show 9501,9503 -E "WARN|ERROR"
 ```
-The client will connect to all 10 servers (whichever ones are up and running) and print results in the format:
+The client supports two main options:
 
-```
-<hostname>:<logfile>:<line>
-```
+- Standard grep options and patterns (e.g., -F ERROR, -E "WARN|ERROR", "INFO"): forwarded to each server’s local grep execution.
+
+- --show host1,host2: restricts sample line output to only the given VM IDs. All servers are still queried for counts, but only the listed hosts’ matching lines are printed.
+
+Output Format
+
+- Without --show → shows only per-host match counts plus the total.
+
+- With --show → shows sample matching lines from the specified hosts, followed by per-host match counts and total.
 
 ### Testing
 
@@ -59,7 +64,7 @@ We provide a generate_logs.go file (to generate logs in each VM i) and a test.go
 - Generates other type of logs with low frequency
 - Generates UNIQUE log in just machine.2.log
 
-#### test.go (assumes all servers are up)
+#### test.go
 
 * Performs tests for
     * Frequent (ERROR) pattern

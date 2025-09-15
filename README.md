@@ -64,7 +64,7 @@ We provide a generate_logs.go file (to generate logs in each VM i) and a test.go
 - Generates other type of logs with low frequency
 - Generates UNIQUE log in just machine.2.log
 
-#### test.go
+#### test.go (does not test machines that are not up)
 
 * Performs tests for
     * Frequent (ERROR) pattern

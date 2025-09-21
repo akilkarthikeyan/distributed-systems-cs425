@@ -32,13 +32,11 @@ type MembershipList struct {
 	members    []*MemberStatus
 }
 
-func sendMembershipRequest(MembershipRequest request, response *MembershipList) {
-	conn, err := net.Dial("udp", "vm9501:1234")
-
+func sendUDPRequest(address string, request interface{}, response interface{}) error {
+	conn, err := net.Dial("udp", address)
 	if err != nil {
 		return fmt.Errorf("failed to dial: %v", err)
 	}
-
 	defer conn.Close()
 
 	reqData, err := json.Marshal(request)
@@ -71,4 +69,12 @@ func sendMembershipRequest(MembershipRequest request, response *MembershipList) 
 	}
 
 	return nil
+}
+
+func sendMembershipRequest(request MembershipRequest, response *MembershipList) {
+	return sendUDPRequest("vm9501:1234", request, response)
+}
+
+func sendMessage(message Message, response *Message) error {
+	return sendUDPRequest("vm9501:1234", message, response)
 }

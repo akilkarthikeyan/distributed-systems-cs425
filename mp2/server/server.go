@@ -13,6 +13,16 @@ import (
 	"strconv"
 )
 
+type MsgType string
+
+const (
+	MsgPing    MsgType = "PING"
+	MsgAck     MsgType = "ACK"
+	MsgJoin    MsgType = "JOIN"
+	MsgJoinOK  MsgType = "JOIN_OK"
+	MsgPingReq MsgType = "PING_REQ"
+)
+
 type RemoteGrep int
 
 type GrepResult struct {
@@ -154,14 +164,22 @@ func handleUDPMessages(conn *net.UDPConn) {
 
 			// Handle different message types here
 			switch message.Type {
-			case "heartbeat":
-				// Handle heartbeat
-			case "gossip":
-				// Handle gossip
-			case "ping":
+			case MsgPing:
 				// Handle ping
-			case "ack":
+				log.Printf("Handling PING from %s", sender)
+
+			case MsgAck:
 				// Handle ack
+				log.Printf("Handling ACK from %s", sender)
+			case MsgJoin:
+				// Handle join request
+				log.Printf("Handling JOIN from %s", sender)
+			case MsgJoinOK:
+				// Handle join response
+				log.Printf("Handling JOIN_OK from %s", sender)
+			case MsgPingReq:
+				// Handle ping request (indirect ping)
+				log.Printf("Handling PING_REQ from %s", sender)
 			default:
 				log.Printf("Unknown message type: %s", message.Type)
 			}

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"flag"
 	"fmt"
 	"log"
@@ -61,7 +62,7 @@ func main() {
 	flag.Parse()
 
 	hostname, err := os.Hostname()
-	if err == nill && hostname != "vm9501" {
+	if err == nil && hostname != "vm9501" {
 		request := MembershipRequest{Hostname: hostname, Port: *port}
 		var response MembershipList
 		err = sendMembershipRequest(request, &response)
@@ -74,17 +75,30 @@ func main() {
 	rpc.Register(grepServer)
 
 	// Listen for incoming RPC connections
-	listener, err := net.Listen("tcp", ":"+*port)
+	tcpListener, err := net.Listen("tcp", ":"+*port)
 	if err != nil {
 		log.Fatalf("Failed to listen on port %s: %v", *port, err)
 	}
-	defer listener.Close()
+	defer tcpListener.Close()
 
-	log.Printf("listening on port %s", *port)
+	udpAddr, err := net.ResolveUDPAddr("udp", ":"+*port)
+	if err != nil {
+		log.Fatalf("Failed to resolve UDP address: %v", err)
+	}
+
+	udpConn, err := net.ListenUDP("udp", udpAddr)
+	if err != nil {
+		log.Fatalf("Failed to listen on UDP port %s: %v", *port, err)
+	}
+	defer udpConn.Close()
+
+	log.Printf("listening on TCP/UDP port %s", *port)
+
+	go handleUDPMessages(udpConn)
 
 	// Accept and handle incoming connections
 	for {
-		conn, err := listener.Accept()
+		conn, err := tcpListener.Accept()
 		if err != nil {
 			log.Printf("Failed to accept connection: %v", err)
 			continue
@@ -115,4 +129,42 @@ func getMachineNumber(hostname string) (int, error) {
 	}
 
 	return num - 6400, nil
+}
+
+func handleUDPMessages(conn *net.UDPConn) {
+	buf := make([]byte, 1024)
+
+	for {
+		n, addr, err := conn.ReadFromUDP(buf)
+		if err != nil {
+			log.Printf("Error reading UDP message: %v", err)
+			continue
+		}
+
+		// Process message in goroutine to avoid blocking
+		go func(data []byte, sender *net.UDPAddr) {
+			var message Message
+			err := json.Unmarshal(data, &message)
+			if err != nil {
+				log.Printf("Failed to unmarshal UDP message from %s: %v", sender, err)
+				return
+			}
+
+			log.Printf("Received UDP message from %s: %+v", sender, message)
+
+			// Handle different message types here
+			switch message.Type {
+			case "heartbeat":
+				// Handle heartbeat
+			case "gossip":
+				// Handle gossip
+			case "ping":
+				// Handle ping
+			case "ack":
+				// Handle ack
+			default:
+				log.Printf("Unknown message type: %s", message.Type)
+			}
+		}(buf[:n], addr)
+	}
 }

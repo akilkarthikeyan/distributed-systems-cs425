@@ -7,12 +7,24 @@ import (
 	"time"
 )
 
+type MessageType string
+
+const (
+	HeartbeatMsg MessageType = "heartbeat"
+	GossipMsg    MessageType = "gossip" 
+	PingMsg      MessageType = "ping"
+	AckMsg       MessageType = "ack"
+	JoinMsg      MessageType = "join"
+	LeaveMsg     MessageType = "leave"
+)
+
 type MembershipRequest struct {
 	Hostname string
 	Port     string
 }
 
 type Message struct {
+	Type      MessageType
 	serverId  string
 	address   string
 	Heartbeat int
@@ -78,3 +90,15 @@ func sendMembershipRequest(request MembershipRequest, response *MembershipList) 
 func sendMessage(message Message, response *Message) error {
 	return sendUDPRequest("vm9501:1234", message, response)
 }
+
+func rand() string {
+	return fmt.Sprintf("%02d", rand.Intn(10)+1)
+}
+
+
+func chooseRandomServer() string {
+	randServer := rand()
+	return "vm" + randServer + ":1234"
+
+
+

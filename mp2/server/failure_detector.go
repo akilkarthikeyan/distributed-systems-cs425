@@ -3,8 +3,10 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"math/rand/v2"
 	"net"
 	"os"
+	"strings"
 	"time"
 )
 
@@ -43,6 +45,21 @@ type MembershipList struct {
 	address    string
 	introducer string
 	members    []*MemberStatus
+}
+
+var servers []string
+
+func init() {
+	data, err := os.ReadFile("sources.json")
+	if err != nil {
+		panic(fmt.Sprintf("Failed to read sources.json: %v", err))
+	}
+
+	err = json.Unmarshal(data, &servers)
+	if err != nil {
+		panic(fmt.Sprintf("Failed to parse sources.json: %v", err))
+	}
+
 }
 
 func sendUDPRequest(address string, request interface{}, response interface{}) error {
@@ -92,13 +109,19 @@ func sendMessage(message Message, response *Message) error {
 	return sendUDPRequest("vm9501:1234", message, response)
 }
 
-func rand() string {
-	return fmt.Sprintf("%02d", rand.Intn(10)+1)
-}
-
 func chooseRandomServer() string {
-	randServer := rand()
-	return "vm" + randServer + ":1234"
+	if len(servers) == 0 {
+		return ""
+	}
+
+	hostname, _ := os.Hostname()
+
+	for {
+		picked := servers[rand.IntN(len(servers))]
+		if !strings.Contains(picked, hostname) {
+			return picked
+		}
+	}
 }
 
 func handleMessage(message Message) {

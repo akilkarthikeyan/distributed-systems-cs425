@@ -1,7 +1,6 @@
 package main
 
 import (
-	"encoding/json"
 	"flag"
 	"fmt"
 	"log"
@@ -9,8 +8,6 @@ import (
 	"net/rpc"
 	"os"
 	"os/exec"
-	"regexp"
-	"strconv"
 )
 
 type MsgType string
@@ -120,69 +117,5 @@ func main() {
 			rpc.ServeConn(c)
 			log.Printf("Client disconnected: %s", c.RemoteAddr())
 		}(conn)
-	}
-}
-
-// log files are named vm#.log based on the machine number
-// parse the machine number from hostname
-// for example input fa25-cs425-6401.cs.illinois.edu returns 1
-func getMachineNumber(hostname string) (int, error) {
-	re := regexp.MustCompile(`-(\d{4})\.`)
-	match := re.FindStringSubmatch(hostname)
-	if len(match) < 2 {
-		return 0, fmt.Errorf("no machine number found in hostname: %s", hostname)
-	}
-
-	num, err := strconv.Atoi(match[1])
-	if err != nil {
-		return 0, err
-	}
-
-	return num - 6400, nil
-}
-
-func handleUDPMessages(conn *net.UDPConn) {
-	buf := make([]byte, 1024)
-
-	for {
-		n, addr, err := conn.ReadFromUDP(buf)
-		if err != nil {
-			log.Printf("Error reading UDP message: %v", err)
-			continue
-		}
-
-		// Process message in goroutine to avoid blocking
-		go func(data []byte, sender *net.UDPAddr) {
-			var message Message
-			err := json.Unmarshal(data, &message)
-			if err != nil {
-				log.Printf("Failed to unmarshal UDP message from %s: %v", sender, err)
-				return
-			}
-
-			log.Printf("Received UDP message from %s: %+v", sender, message)
-
-			// Handle different message types here
-			switch message.Type {
-			case MsgPing:
-				// Handle ping
-				log.Printf("Handling PING from %s", sender)
-
-			case MsgAck:
-				// Handle ack
-				log.Printf("Handling ACK from %s", sender)
-			case MsgJoin:
-				// Handle join request
-				log.Printf("Handling JOIN from %s", sender)
-			case MsgJoinOK:
-				// Handle join response
-				log.Printf("Handling JOIN_OK from %s", sender)
-			case MsgPingReq:
-				// Handle ping request (indirect ping)
-				log.Printf("Handling PING_REQ from %s", sender)
-			default:
-				log.Printf("Unknown message type: %s", message.Type)
-			}
-		}(buf[:n], addr)
 	}
 }

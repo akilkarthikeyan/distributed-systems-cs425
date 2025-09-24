@@ -7,6 +7,7 @@ import (
 	"net"
 	"os"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -34,10 +35,12 @@ type Message struct {
 }
 
 type MemberStatus struct {
-	serverId string
-	address  string
-	time     time.Time
-	status   bool
+	serverId    string
+	address     string
+	lastSeen    time.Time
+	lastSuspect time.Time
+	alive       bool
+	suspect     bool
 }
 
 type MembershipList struct {
@@ -54,9 +57,15 @@ var (
 	localMembership = MembershipList{
 		members: make([]*MemberStatus, 0),
 	}
+	pendingPings     = make(map[string]time.Time)
+	pendingPingMutex sync.Mutex
 )
 
-const probeInterval = 2 * time.Second
+const (
+	probeInterval  = 2 * time.Second
+	ackTimeout     = 3 * time.Second
+	suspectTimeout = 10 * time.Second
+)
 
 func init() {
 	data, err := os.ReadFile("sources.json")
@@ -71,6 +80,27 @@ func init() {
 
 }
 
+func (ml *MembershipList) markSuspect(serverId, address string) *MemberStatus {
+	member := ml.ensureMember(serverId, address)
+	member.suspect = true
+	member.lastSuspect = time.Now()
+	member.alive = false
+	return member
+}
+func (ml *MembershipList) markDead(serverId, address string) *MemberStatus {
+	member := ml.ensureMember(serverId, address)
+	member.alive = false
+	member.suspect = false
+	return member
+}
+
+func (ml *MembershipList) markAlive(serverId, address string) *MemberStatus {
+	member := ml.ensureMember(serverId, address)
+	member.alive = true
+	member.suspect = false
+	member.lastSeen = time.Now()
+	return member
+}
 func sendUDPRequest(address string, request interface{}, response interface{}) error {
 	conn, err := net.Dial("udp", address)
 	if err != nil {
@@ -94,27 +124,7 @@ func sendUDPRequest(address string, request interface{}, response interface{}) e
 		return nil
 	}
 
-	func handleUDPMessages(conn *net.UDPConn) {
-		buf := make([]byte, 4096)
-	
-		for {
-			n, _, err := conn.ReadFromUDP(buf)
-			if err != nil {
-				fmt.Printf("Failed to read UDP message: %v\n", err)
-				continue
-			}
-	
-			var message Message
-			if err := json.Unmarshal(buf[:n], &message); err != nil {
-				fmt.Printf("Failed to unmarshal UDP message: %v\n", err)
-				continue
-			}
-	
-			handleMessage(message)
-		}
-	}
-
-	conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+	conn.SetReadDeadline(time.Now().Add(ackTimeout))
 
 	buf := make([]byte, 1024)
 	n, err := conn.Read(buf)
@@ -130,9 +140,31 @@ func sendUDPRequest(address string, request interface{}, response interface{}) e
 	}
 
 	return nil
+
 }
 
-func startFailureDetectionLoop() {
+func handleUDPMessages(conn *net.UDPConn) {
+	buf := make([]byte, 4096)
+
+	for {
+		n, _, err := conn.ReadFromUDP(buf)
+		if err != nil {
+			fmt.Printf("Failed to read UDP message: %v\n", err)
+			continue
+		}
+
+		var message Message
+		if err := json.Unmarshal(buf[:n], &message); err != nil {
+			fmt.Printf("Failed to unmarshal UDP message: %v\n", err)
+			continue
+		}
+
+		handleMessage(message)
+	}
+
+}
+
+func startPingLoop() {
 	ticker := time.NewTicker(probeInterval)
 	defer ticker.Stop()
 
@@ -156,6 +188,12 @@ func startFailureDetectionLoop() {
 			fmt.Printf("Failed to send PING to %s: %v\n", target, err)
 		}
 	}
+}
+
+func checkPendingPings() {
+	now := time.Now()
+	pendingPingMutex.Lock()
+
 }
 
 func sendMembershipRequest(request MembershipRequest, response *MembershipList) {
@@ -199,13 +237,6 @@ func (ml *MembershipList) ensureMember(serverID, address string) *MemberStatus {
 	return member
 }
 
-func (ml *MembershipList) markAlive(serverID, address string) *MemberStatus {
-	member := ml.ensureMember(serverID, address)
-	member.status = true
-	member.time = time.Now()
-	return member
-}
-
 func handleMessage(message Message) {
 	var response Message
 	var shouldRespond bool = false
@@ -230,7 +261,7 @@ func handleMessage(message Message) {
 	case AckMsg:
 		// Handle ack - update failure detection status
 		fmt.Printf("Handling ACK from %s (ServerId: %s)\n", message.address, message.serverId)
-		// Mark server as alive in your failure detection data structures
+		// Mark server as alive in membership data structure
 		member := localMembership.markAlive(message.serverId, message.address)
 		fmt.Printf("Membership refreshed: %+v\n", *member)
 

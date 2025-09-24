@@ -47,7 +47,13 @@ type MembershipList struct {
 	members    []*MemberStatus
 }
 
-var servers []string
+var (
+	servers []string
+
+	localMembership = MembershipList{
+		members: make([]*MemberStatus, 0),
+	}
+)
 
 func init() {
 	data, err := os.ReadFile("sources.json")
@@ -124,6 +130,31 @@ func chooseRandomServer() string {
 	}
 }
 
+func (ml *MembershipList) ensureMember(serverID, address string) *MemberStatus {
+	for _, member := range ml.members {
+		if member.serverId == serverID {
+			if address != "" {
+				member.address = address
+			}
+			return member
+		}
+	}
+
+	member := &MemberStatus{
+		serverId: serverID,
+		address:  address,
+	}
+	ml.members = append(ml.members, member)
+	return member
+}
+
+func (ml *MembershipList) markAlive(serverID, address string) *MemberStatus {
+	member := ml.ensureMember(serverID, address)
+	member.status = true
+	member.time = time.Now()
+	return member
+}
+
 func handleMessage(message Message) {
 	var response Message
 	var shouldRespond bool = false
@@ -134,6 +165,10 @@ func handleMessage(message Message) {
 	case PingMsg:
 		// Handle ping - respond with ACK
 		fmt.Printf("Handling PING from %s\n", message.serverId)
+
+		member := localMembership.markAlive(message.serverId, message.address)
+		fmt.Printf("Membership refreshed: %+v\n", *member)
+
 		response = Message{
 			Type:     AckMsg,
 			serverId: hostname,
@@ -145,6 +180,8 @@ func handleMessage(message Message) {
 		// Handle ack - update failure detection status
 		fmt.Printf("Handling ACK from %s (ServerId: %s)\n", message.address, message.serverId)
 		// Mark server as alive in your failure detection data structures
+		member := localMembership.markAlive(message.serverId, message.address)
+		fmt.Printf("Membership refreshed: %+v\n", *member)
 
 	case JoinMsg:
 		// Handle join request - respond with JOIN_OK

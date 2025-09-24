@@ -48,12 +48,15 @@ type MembershipList struct {
 }
 
 var (
-	servers []string
+	servers            []string
+	localServerAddress string
 
 	localMembership = MembershipList{
 		members: make([]*MemberStatus, 0),
 	}
 )
+
+const probeInterval = 2 * time.Second
 
 func init() {
 	data, err := os.ReadFile("sources.json")
@@ -80,12 +83,35 @@ func sendUDPRequest(address string, request interface{}, response interface{}) e
 		return fmt.Errorf("failed to marshal request: %v", err)
 	}
 
-	_, err = conn.Write(reqData)
-	if err != nil {
+	if _, err = conn.Write(reqData); err != nil {
 		if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
 			return fmt.Errorf("timeout writing request: %v", err)
 		}
 		return fmt.Errorf("failed to write request: %v", err)
+	}
+
+	if response == nil {
+		return nil
+	}
+
+	func handleUDPMessages(conn *net.UDPConn) {
+		buf := make([]byte, 4096)
+	
+		for {
+			n, _, err := conn.ReadFromUDP(buf)
+			if err != nil {
+				fmt.Printf("Failed to read UDP message: %v\n", err)
+				continue
+			}
+	
+			var message Message
+			if err := json.Unmarshal(buf[:n], &message); err != nil {
+				fmt.Printf("Failed to unmarshal UDP message: %v\n", err)
+				continue
+			}
+	
+			handleMessage(message)
+		}
 	}
 
 	conn.SetReadDeadline(time.Now().Add(5 * time.Second))
@@ -99,12 +125,37 @@ func sendUDPRequest(address string, request interface{}, response interface{}) e
 		return fmt.Errorf("failed to read response: %v", err)
 	}
 
-	err = json.Unmarshal(buf[:n], response)
-	if err != nil {
+	if err = json.Unmarshal(buf[:n], response); err != nil {
 		return fmt.Errorf("failed to unmarshal response: %v", err)
 	}
 
 	return nil
+}
+
+func startFailureDetectionLoop() {
+	ticker := time.NewTicker(probeInterval)
+	defer ticker.Stop()
+
+	for range ticker.C {
+		if localServerAddress == "" {
+			continue
+		}
+
+		target := chooseRandomServer()
+		if target == "" {
+			continue
+		}
+
+		ping := Message{
+			Type:     PingMsg,
+			serverId: localMembership.serverId,
+			address:  localServerAddress,
+		}
+
+		if err := sendUDPRequest(target, ping, nil); err != nil {
+			fmt.Printf("Failed to send PING to %s: %v\n", target, err)
+		}
+	}
 }
 
 func sendMembershipRequest(request MembershipRequest, response *MembershipList) {

@@ -8,29 +8,32 @@ import (
 	"net"
 	"sync"
 	"time"
+	"math/rand"
 )
 
 type Status string
 
 const (
 	Alive     Status = "alive"
-	Dead      Status = "dead"
+	Failed      Status = "failed"
 	Suspected Status = "suspected"
 )
 
 type MessageType string
 
 const (
-	Gossip MessageType = "gossip"
-	Join   MessageType = "join"
+	Gossip 		MessageType = "gossip"
+	Join   		MessageType = "join"
+	JoinReply 	MessageType = "join-reply"
 )
 
 type Member struct {
-	IP        string `json:"ip"`
-	Port      int    `json:"port"`
-	Timestamp string `json:"timestamp"`
-	Heartbeat int    `json:"heartbeat"`
-	Status    Status `json:"status"`
+	IP        	string 	`json:"ip"`
+	Port      	int    	`json:"port"`
+	Timestamp 	string 	`json:"timestamp"`
+	Heartbeat 	int    	`json:"heartbeat"`
+	LastUpdated int  	`json:"lastUpdated"`
+	Status    	Status 	`json:"status"`
 }
 
 type Message struct {
@@ -40,13 +43,17 @@ type Message struct {
 }
 
 const (
-	ListenPort     = 1234
+	SelfPort     = 1234
 	SelfHost       = "fa25-cs425-9501.cs.illinois.edu"
 	IntroducerHost = "fa25-cs425-9501.cs.illinois.edu"
 	IntroducerPort = 1234
+	Tsuspect      = 5
+	Tfail         = 10
+	Tcleanup      = 10
 )
 
 var membershipList sync.Map
+var selfId string
 
 func sendUDP(conn *net.UDPConn, addr *net.UDPAddr, msg *Message) {
 	data, err := json.Marshal(msg)
@@ -74,27 +81,103 @@ func listenUDP(conn *net.UDPConn) {
 		}
 		log.Printf("recv %s from %s: %+v", msg.MessageType, raddr.String(), msg)
 
-		// TODO: merge membership, update heartbeats, etc.
-		// Example response (disabled):
-		// resp := Message{MessageType: Gossip, Self: currentSelf(), Members: snapshotMembers()}
-		// go sendUDP(conn, raddr, &resp)
 	}
 }
 
 func keyFor(m Member) string { return fmt.Sprintf("%s:%d:%s", m.IP, m.Port, m.Timestamp) }
 
-func snapshotMembers() map[string]Member {
+func snapshotMembers(omitFailed bool) map[string]Member {
 	out := make(map[string]Member)
 	membershipList.Range(func(k, v any) bool {
+		if omitFailed && v.(Member).Status == Failed {
+			return true
+		}
 		out[k.(string)] = v.(Member)
 		return true
 	})
 	return out
 }
 
+func selectKMembers(members map[string]Member, k int) []Member {
+    slice := make([]Member, 0, len(members))
+    for _, m := range members {
+        slice = append(slice, m)
+    }
+
+    // Fewer than k members
+    if len(slice) <= k {
+        return slice
+    }
+
+    rand.Shuffle(len(slice), func(i, j int) {
+        slice[i], slice[j] = slice[j], slice[i]
+    })
+
+    return slice[:k]
+}
+
+func gossip(conn *net.UDPConn, interval time.Duration) {
+    ticker := time.NewTicker(interval)
+    defer ticker.Stop()
+
+	tick := 0
+    for range ticker.C {
+		tick++
+
+		// Increment self heartbeat
+		v, _ := membershipList.Load(selfId)
+		self := v.(Member)
+
+		self.Heartbeat++
+		self.LastUpdated = tick
+		membershipList.Store(selfId, self)
+
+		// Check for failed/suspected members
+		membershipList.Range(func(k, v any) bool {
+			m := v.(Member)
+			elapsed := tick - m.LastUpdated
+			if m.Status == Alive && elapsed >= Tsuspect {
+				m.Status = Suspected
+				membershipList.Store(k.(string), m)
+			} else if m.Status == Suspected && elapsed >= Tfail {
+				m.Status = Failed
+				membershipList.Store(k.(string), m)
+			} else if m.Status == Failed && elapsed >= Tcleanup {
+				membershipList.Delete(k.(string))
+			}
+			return true
+		})
+
+		// Select 3 random members to gossip to
+		members := snapshotMembers(true)
+		delete(members, selfId)
+
+		// Gossip
+		targets := selectKMembers(members, 3)
+		for _, target := range targets {
+			targetAddr, err := net.ResolveUDPAddr("udp", fmt.Sprintf("%s:%d", target.IP, target.Port))
+			if err != nil {
+				log.Printf("resolve target: %v", err)
+				continue
+			}
+			msg := Message{
+				MessageType: Gossip,
+				Self:        &self,
+				Members:     members,
+			}
+			sendUDP(conn, targetAddr, &msg)
+			log.Printf("sent GOSSIP to %s", targetAddr.String())
+		}
+    }
+}
+
+
 func main() {
-	// Bind locally on all interfaces :ListenPort
-	listenAddr, err := net.ResolveUDPAddr("udp", fmt.Sprintf(":%d", ListenPort))
+	// Set seed for random
+	rand.Seed(time.Now().UnixNano())
+
+	// Bind locally on all interfaces :SelfPort
+	listenAddr, err := net.ResolveUDPAddr("udp", fmt.Sprintf(":%d", SelfPort))
 	if err != nil {
 		log.Fatalf("resolve listen: %v", err)
 	}
@@ -107,18 +190,19 @@ func main() {
     // Add self to membership list
 	self := Member{
 		IP:        SelfHost,
-		Port:      ListenPort,
+		Port:      SelfPort,
 		Timestamp: time.Now().Format(time.RFC3339Nano),
 		Heartbeat: 0,
 		Status:    Alive,
 	}
-	membershipList.Store(keyFor(self), self)
+	selfId = keyFor(self)
+	membershipList.Store(selfId, self)
 
 	// Listen for messages
 	go listenUDP(conn)
 
 	// Send JOIN to introducer iff we are not the introducer
-	if !(SelfHost == IntroducerHost && ListenPort == IntroducerPort) {
+	if !(SelfHost == IntroducerHost && SelfPort == IntroducerPort) {
 		introducerAddr, err := net.ResolveUDPAddr("udp", fmt.Sprintf("%s:%d", IntroducerHost, IntroducerPort))
 		if err != nil {
 			log.Fatalf("resolve introducer: %v", err)
@@ -130,9 +214,10 @@ func main() {
 		}
 		sendUDP(conn, introducerAddr, &initial)
 		log.Printf("sent JOIN to %s", introducerAddr.String())
-	} else {
-		log.Printf("running as introducer on :%d", ListenPort)
 	}
+
+	// Gossip
+	go gossip(conn, 5*time.Second)
 
 	select {}
 }

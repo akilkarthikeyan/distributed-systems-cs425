@@ -54,6 +54,7 @@ const (
 
 var membershipList sync.Map
 var selfId string
+var tick int
 
 func sendUDP(conn *net.UDPConn, addr *net.UDPAddr, msg *Message) {
 	data, err := json.Marshal(msg)
@@ -120,7 +121,6 @@ func gossip(conn *net.UDPConn, interval time.Duration) {
     ticker := time.NewTicker(interval)
     defer ticker.Stop()
 
-	tick := 0
     for range ticker.C {
 		tick++
 
@@ -148,12 +148,14 @@ func gossip(conn *net.UDPConn, interval time.Duration) {
 			return true
 		})
 
-		// Select 3 random members to gossip to
+		// Select 3 random members to gossip to (exlude self)
 		members := snapshotMembers(true)
+		temp := members[selfId]
 		delete(members, selfId)
+		targets := selectKMembers(members, 3)
+		members[selfId] = temp // add self back
 
 		// Gossip
-		targets := selectKMembers(members, 3)
 		for _, target := range targets {
 			targetAddr, err := net.ResolveUDPAddr("udp", fmt.Sprintf("%s:%d", target.IP, target.Port))
 			if err != nil {

@@ -23,7 +23,7 @@ type MessageType string
 
 const (
 	Gossip 		MessageType = "gossip"
-	Join   		MessageType = "join"
+	JoinReq   	MessageType = "join-req"
 	JoinReply 	MessageType = "join-reply"
 )
 
@@ -56,35 +56,6 @@ var membershipList sync.Map
 var selfId string
 var tick int
 
-func sendUDP(conn *net.UDPConn, addr *net.UDPAddr, msg *Message) {
-	data, err := json.Marshal(msg)
-	if err != nil {
-		log.Printf("marshal: %v", err)
-		return
-	}
-	if _, err := conn.WriteToUDP(data, addr); err != nil {
-		log.Printf("write: %v", err)
-	}
-}
-
-func listenUDP(conn *net.UDPConn) {
-	buf := make([]byte, 4096)
-	for {
-		n, raddr, err := conn.ReadFromUDP(buf)
-		if err != nil {
-			log.Printf("read: %v", err)
-			continue
-		}
-		var msg Message
-		if err := json.Unmarshal(buf[:n], &msg); err != nil {
-			log.Printf("unmarshal from %v: %v", raddr, err)
-			continue
-		}
-		log.Printf("recv %s from %s: %+v", msg.MessageType, raddr.String(), msg)
-
-	}
-}
-
 func keyFor(m Member) string { return fmt.Sprintf("%s:%d:%s", m.IP, m.Port, m.Timestamp) }
 
 func snapshotMembers(omitFailed bool) map[string]Member {
@@ -115,6 +86,35 @@ func selectKMembers(members map[string]Member, k int) []Member {
     })
 
     return slice[:k]
+}
+
+func sendUDP(conn *net.UDPConn, addr *net.UDPAddr, msg *Message) {
+	data, err := json.Marshal(msg)
+	if err != nil {
+		log.Printf("marshal: %v", err)
+		return
+	}
+	if _, err := conn.WriteToUDP(data, addr); err != nil {
+		log.Printf("write: %v", err)
+	}
+}
+
+func listenUDP(conn *net.UDPConn) {
+	buf := make([]byte, 4096)
+	for {
+		n, raddr, err := conn.ReadFromUDP(buf)
+		if err != nil {
+			log.Printf("read: %v", err)
+			continue
+		}
+		var msg Message
+		if err := json.Unmarshal(buf[:n], &msg); err != nil {
+			log.Printf("unmarshal from %v: %v", raddr, err)
+			continue
+		}
+		
+		handleMessage(conn, &msg)
+	}
 }
 
 func gossip(conn *net.UDPConn, interval time.Duration) {
@@ -168,11 +168,35 @@ func gossip(conn *net.UDPConn, interval time.Duration) {
 				Members:     members,
 			}
 			sendUDP(conn, targetAddr, &msg)
-			log.Printf("sent GOSSIP to %s", targetAddr.String())
+			log.Printf("sent gossip to %s", targetAddr.String())
 		}
     }
 }
 
+func handleMessage(conn *net.UDPConn, msg *Message) {
+	log.Printf("recv %s from %s", msg.MessageType, msg.Self.IP)
+
+	switch msg.MessageType {
+		case JoinReq:
+			// Add sender to membership list
+			members := snapshotMembers(true)
+			reply := Message{
+				MessageType: JoinReply,
+				Self:        nil, // omitted due to ,omitempty
+				Members:     members,
+			}
+			senderAddr, err := net.ResolveUDPAddr("udp", fmt.Sprintf("%s:%d", msg.Self.IP, msg.Self.Port))
+			if err != nil {
+				log.Printf("resolve sender: %v", err)
+				return
+			}
+			sendUDP(conn, senderAddr, &reply)
+			log.Printf("sent join-reply to %s", senderAddr.String())
+		case Gossip:
+			//
+		case JoinReply:
+	}
+}
 
 func main() {
 	// Set seed for random
@@ -203,19 +227,19 @@ func main() {
 	// Listen for messages
 	go listenUDP(conn)
 
-	// Send JOIN to introducer iff we are not the introducer
+	// Send join to introducer iff we are not the introducer
 	if !(SelfHost == IntroducerHost && SelfPort == IntroducerPort) {
 		introducerAddr, err := net.ResolveUDPAddr("udp", fmt.Sprintf("%s:%d", IntroducerHost, IntroducerPort))
 		if err != nil {
 			log.Fatalf("resolve introducer: %v", err)
 		}
 		initial := Message{
-			MessageType: Join,
+			MessageType: JoinReq,
 			Self:        &self,
 			Members:     nil, // omitted due to ,omitempty
 		}
 		sendUDP(conn, introducerAddr, &initial)
-		log.Printf("sent JOIN to %s", introducerAddr.String())
+		log.Printf("sent join-req to %s", introducerAddr.String())
 	}
 
 	// Gossip

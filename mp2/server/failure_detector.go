@@ -7,6 +7,7 @@ import (
 	"net"
 	"os"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -34,10 +35,12 @@ type Message struct {
 }
 
 type MemberStatus struct {
-	serverId string
-	address  string
-	time     time.Time
-	status   bool
+	serverId    string
+	address     string
+	lastSeen    time.Time
+	lastSuspect time.Time
+	alive       bool
+	suspect     bool
 }
 
 type MembershipList struct {
@@ -47,7 +50,22 @@ type MembershipList struct {
 	members    []*MemberStatus
 }
 
-var servers []string
+var (
+	servers            []string
+	localServerAddress string
+
+	localMembership = MembershipList{
+		members: make([]*MemberStatus, 0),
+	}
+	pendingPings     = make(map[string]time.Time)
+	pendingPingMutex sync.Mutex
+)
+
+const (
+	probeInterval  = 2 * time.Second
+	ackTimeout     = 3 * time.Second
+	suspectTimeout = 10 * time.Second
+)
 
 func init() {
 	data, err := os.ReadFile("sources.json")
@@ -62,6 +80,27 @@ func init() {
 
 }
 
+func (ml *MembershipList) markSuspect(serverId, address string) *MemberStatus {
+	member := ml.ensureMember(serverId, address)
+	member.suspect = true
+	member.lastSuspect = time.Now()
+	member.alive = false
+	return member
+}
+func (ml *MembershipList) markDead(serverId, address string) *MemberStatus {
+	member := ml.ensureMember(serverId, address)
+	member.alive = false
+	member.suspect = false
+	return member
+}
+
+func (ml *MembershipList) markAlive(serverId, address string) *MemberStatus {
+	member := ml.ensureMember(serverId, address)
+	member.alive = true
+	member.suspect = false
+	member.lastSeen = time.Now()
+	return member
+}
 func sendUDPRequest(address string, request interface{}, response interface{}) error {
 	conn, err := net.Dial("udp", address)
 	if err != nil {
@@ -74,15 +113,18 @@ func sendUDPRequest(address string, request interface{}, response interface{}) e
 		return fmt.Errorf("failed to marshal request: %v", err)
 	}
 
-	_, err = conn.Write(reqData)
-	if err != nil {
+	if _, err = conn.Write(reqData); err != nil {
 		if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
 			return fmt.Errorf("timeout writing request: %v", err)
 		}
 		return fmt.Errorf("failed to write request: %v", err)
 	}
 
-	conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+	if response == nil {
+		return nil
+	}
+
+	conn.SetReadDeadline(time.Now().Add(ackTimeout))
 
 	buf := make([]byte, 1024)
 	n, err := conn.Read(buf)
@@ -93,12 +135,65 @@ func sendUDPRequest(address string, request interface{}, response interface{}) e
 		return fmt.Errorf("failed to read response: %v", err)
 	}
 
-	err = json.Unmarshal(buf[:n], response)
-	if err != nil {
+	if err = json.Unmarshal(buf[:n], response); err != nil {
 		return fmt.Errorf("failed to unmarshal response: %v", err)
 	}
 
 	return nil
+
+}
+
+func handleUDPMessages(conn *net.UDPConn) {
+	buf := make([]byte, 4096)
+
+	for {
+		n, _, err := conn.ReadFromUDP(buf)
+		if err != nil {
+			fmt.Printf("Failed to read UDP message: %v\n", err)
+			continue
+		}
+
+		var message Message
+		if err := json.Unmarshal(buf[:n], &message); err != nil {
+			fmt.Printf("Failed to unmarshal UDP message: %v\n", err)
+			continue
+		}
+
+		handleMessage(message)
+	}
+
+}
+
+func startPingLoop() {
+	ticker := time.NewTicker(probeInterval)
+	defer ticker.Stop()
+
+	for range ticker.C {
+		if localServerAddress == "" {
+			continue
+		}
+
+		target := chooseRandomServer()
+		if target == "" {
+			continue
+		}
+
+		ping := Message{
+			Type:     PingMsg,
+			serverId: localMembership.serverId,
+			address:  localServerAddress,
+		}
+
+		if err := sendUDPRequest(target, ping, nil); err != nil {
+			fmt.Printf("Failed to send PING to %s: %v\n", target, err)
+		}
+	}
+}
+
+func checkPendingPings() {
+	now := time.Now()
+	pendingPingMutex.Lock()
+
 }
 
 func sendMembershipRequest(request MembershipRequest, response *MembershipList) {
@@ -124,6 +219,24 @@ func chooseRandomServer() string {
 	}
 }
 
+func (ml *MembershipList) ensureMember(serverID, address string) *MemberStatus {
+	for _, member := range ml.members {
+		if member.serverId == serverID {
+			if address != "" {
+				member.address = address
+			}
+			return member
+		}
+	}
+
+	member := &MemberStatus{
+		serverId: serverID,
+		address:  address,
+	}
+	ml.members = append(ml.members, member)
+	return member
+}
+
 func handleMessage(message Message) {
 	var response Message
 	var shouldRespond bool = false
@@ -134,6 +247,10 @@ func handleMessage(message Message) {
 	case PingMsg:
 		// Handle ping - respond with ACK
 		fmt.Printf("Handling PING from %s\n", message.serverId)
+
+		member := localMembership.markAlive(message.serverId, message.address)
+		fmt.Printf("Membership refreshed: %+v\n", *member)
+
 		response = Message{
 			Type:     AckMsg,
 			serverId: hostname,
@@ -144,7 +261,9 @@ func handleMessage(message Message) {
 	case AckMsg:
 		// Handle ack - update failure detection status
 		fmt.Printf("Handling ACK from %s (ServerId: %s)\n", message.address, message.serverId)
-		// Mark server as alive in your failure detection data structures
+		// Mark server as alive in membership data structure
+		member := localMembership.markAlive(message.serverId, message.address)
+		fmt.Printf("Membership refreshed: %+v\n", *member)
 
 	case JoinMsg:
 		// Handle join request - respond with JOIN_OK

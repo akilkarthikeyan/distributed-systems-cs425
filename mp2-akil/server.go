@@ -88,6 +88,39 @@ func selectKMembers(members map[string]Member, k int) []Member {
     return slice[:k]
 }
 
+func mergeMembershipList(members map[string]Member) {
+	for id, m := range members {
+		v, ok := membershipList.Load(id)
+		if !ok { // New member
+			newMember := Member{
+				IP:         	m.IP,
+				Port:       	m.Port,
+				Timestamp:  	m.Timestamp,
+				Heartbeat:  	m.Heartbeat,
+				LastUpdated: 	tick,
+				Status:     	m.Status
+			}
+			membershipList.Store(id, newMember)
+			continue
+		} else { // Existing member
+			existing := v.(Member)
+			if m.Heartbeat > existing.Heartbeat {
+				existing.Heartbeat = m.Heartbeat
+				existing.Status = m.Status
+				existing.LastUpdated = tick
+				membershipList.Store(id, existing)
+			}
+			if m.Heartbeat == existing.Heartbeat {
+				if m.Status == Suspected && existing.Status == Alive {
+					existing.Status = Suspected
+					existing.LastUpdated = tick
+					membershipList.Store(id, existing)
+				} 
+			}
+		}
+	}
+}
+
 func sendUDP(conn *net.UDPConn, addr *net.UDPAddr, msg *Message) {
 	data, err := json.Marshal(msg)
 	if err != nil {
@@ -128,6 +161,7 @@ func gossip(conn *net.UDPConn, interval time.Duration) {
 		v, _ := membershipList.Load(selfId)
 		self := v.(Member)
 
+		self.Status = Alive
 		self.Heartbeat++
 		self.LastUpdated = tick
 		membershipList.Store(selfId, self)
@@ -177,7 +211,7 @@ func handleMessage(conn *net.UDPConn, msg *Message) {
 
 	switch msg.MessageType {
 		case JoinReq:
-			// Add sender to membership list
+			// Send JoinReply with current membership list
 			members := snapshotMembers(true)
 			v, _ := membershipList.Load(selfId)
 			self := v.(Member)
@@ -194,9 +228,15 @@ func handleMessage(conn *net.UDPConn, msg *Message) {
 			}
 			sendUDP(conn, senderAddr, &reply)
 			log.Printf("sent %s to %s", reply.MessageType, keyFor(*msg.Self))
+
 		case Gossip:
-			//
+			log.Printf("recv %s from %s", msg.MessageType, keyFor(*msg.Self))
+			mergeMembershipList(msg.Members)
+
 		case JoinReply:
+			log.Printf("recv %s from %s", msg.MessageType, keyFor(*msg.Self))
+			mergeMembershipList(msg.Members)
+
 	}
 }
 
@@ -241,7 +281,7 @@ func main() {
 			Members:     nil, // omitted due to ,omitempty
 		}
 		sendUDP(conn, introducerAddr, &initial)
-		log.Printf("sent %s to %s:%s", initial.MessageType, IntroducerHost, IntroducerPort)
+		log.Printf("sent %s to %s:%d", initial.MessageType, IntroducerHost, IntroducerPort)
 	}
 
 	// Gossip

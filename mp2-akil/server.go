@@ -98,7 +98,7 @@ func mergeMembershipList(members map[string]Member) {
 				Timestamp:  	m.Timestamp,
 				Heartbeat:  	m.Heartbeat,
 				LastUpdated: 	tick,
-				Status:     	m.Status
+				Status:     	m.Status,
 			}
 			membershipList.Store(id, newMember)
 			continue
@@ -230,11 +230,9 @@ func handleMessage(conn *net.UDPConn, msg *Message) {
 			log.Printf("sent %s to %s", reply.MessageType, keyFor(*msg.Self))
 
 		case Gossip:
-			log.Printf("recv %s from %s", msg.MessageType, keyFor(*msg.Self))
 			mergeMembershipList(msg.Members)
 
 		case JoinReply:
-			log.Printf("recv %s from %s", msg.MessageType, keyFor(*msg.Self))
 			mergeMembershipList(msg.Members)
 
 	}

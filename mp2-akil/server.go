@@ -48,8 +48,8 @@ const (
 	IntroducerHost = "fa25-cs425-9501.cs.illinois.edu"
 	IntroducerPort = 1234
 	Tsuspect      = 5
-	Tfail         = 10
-	Tcleanup      = 10
+	Tfail         = 5
+	Tcleanup      = 5
 )
 
 var membershipList sync.Map
@@ -172,9 +172,11 @@ func gossip(conn *net.UDPConn, interval time.Duration) {
 			elapsed := tick - m.LastUpdated
 			if m.Status == Alive && elapsed >= Tsuspect {
 				m.Status = Suspected
+				m.LastUpdated = tick
 				membershipList.Store(k.(string), m)
 			} else if m.Status == Suspected && elapsed >= Tfail {
 				m.Status = Failed
+				m.LastUpdated = tick
 				membershipList.Store(k.(string), m)
 			} else if m.Status == Failed && elapsed >= Tcleanup {
 				membershipList.Delete(k.(string))
@@ -241,6 +243,14 @@ func handleMessage(conn *net.UDPConn, msg *Message) {
 func main() {
 	// Set seed for random
 	rand.Seed(time.Now().UnixNano())
+
+	// Set log file for output
+	f, err := os.OpenFile("machine.log", os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
+    if err != nil {
+        log.Fatalf("error opening log file: %v", err)
+    }
+    defer f.Close()
+	log.SetOutput(f)
 
 	// Bind locally on all interfaces :SelfPort
 	listenAddr, err := net.ResolveUDPAddr("udp", fmt.Sprintf(":%d", SelfPort))

@@ -51,6 +51,7 @@ const (
 	Tsuspect      = 5
 	Tfail         = 5
 	Tcleanup      = 5
+	K			  = 3
 )
 
 var membershipList sync.Map
@@ -185,10 +186,10 @@ func gossip(conn *net.UDPConn, interval time.Duration) {
 			return true
 		})
 
-		// Select 3 random members to gossip to (exlude self)
+		// Select k random members to gossip to (exlude self)
 		members := snapshotMembers(true)
 		delete(members, selfId)
-		targets := selectKMembers(members, 3)
+		targets := selectKMembers(members, K)
 		members[selfId] = self // add self back
 
 		// Gossip

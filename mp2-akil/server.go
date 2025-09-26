@@ -150,10 +150,9 @@ func gossip(conn *net.UDPConn, interval time.Duration) {
 
 		// Select 3 random members to gossip to (exlude self)
 		members := snapshotMembers(true)
-		temp := members[selfId]
 		delete(members, selfId)
 		targets := selectKMembers(members, 3)
-		members[selfId] = temp // add self back
+		members[selfId] = self // add self back
 
 		// Gossip
 		for _, target := range targets {
@@ -168,21 +167,24 @@ func gossip(conn *net.UDPConn, interval time.Duration) {
 				Members:     members,
 			}
 			sendUDP(conn, targetAddr, &msg)
-			log.Printf("sent gossip to %s", targetAddr.String())
+			log.Printf("sent %s to %s", MessageType(Gossip), keyFor(target))
 		}
     }
 }
 
 func handleMessage(conn *net.UDPConn, msg *Message) {
-	log.Printf("recv %s from %s", msg.MessageType, msg.Self.IP)
+	log.Printf("recv %s from %s", msg.MessageType, keyFor(*msg.Self))
 
 	switch msg.MessageType {
 		case JoinReq:
 			// Add sender to membership list
 			members := snapshotMembers(true)
+			v, _ := membershipList.Load(selfId)
+			self := v.(Member)
+
 			reply := Message{
 				MessageType: JoinReply,
-				Self:        nil, // omitted due to ,omitempty
+				Self:        &self,
 				Members:     members,
 			}
 			senderAddr, err := net.ResolveUDPAddr("udp", fmt.Sprintf("%s:%d", msg.Self.IP, msg.Self.Port))
@@ -191,7 +193,7 @@ func handleMessage(conn *net.UDPConn, msg *Message) {
 				return
 			}
 			sendUDP(conn, senderAddr, &reply)
-			log.Printf("sent join-reply to %s", senderAddr.String())
+			log.Printf("sent %s to %s", reply.MessageType, keyFor(*msg.Self))
 		case Gossip:
 			//
 		case JoinReply:
@@ -239,7 +241,7 @@ func main() {
 			Members:     nil, // omitted due to ,omitempty
 		}
 		sendUDP(conn, introducerAddr, &initial)
-		log.Printf("sent join-req to %s", introducerAddr.String())
+		log.Printf("sent %s to %s:%s", initial.MessageType, IntroducerHost, IntroducerPort)
 	}
 
 	// Gossip

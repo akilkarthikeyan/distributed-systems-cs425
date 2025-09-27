@@ -5,36 +5,38 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"math/rand"
 	"net"
+	"os"
 	"sync"
 	"time"
-	"math/rand"
-	"os"
 )
 
 type Status string
 
 const (
 	Alive     Status = "alive"
-	Failed      Status = "failed"
+	Failed    Status = "failed"
 	Suspected Status = "suspected"
 )
 
 type MessageType string
 
 const (
-	Gossip 		MessageType = "gossip"
-	JoinReq   	MessageType = "join-req"
-	JoinReply 	MessageType = "join-reply"
+	Gossip    MessageType = "gossip"
+	JoinReq   MessageType = "join-req"
+	JoinReply MessageType = "join-reply"
+	Ping      MessageType = "ping"
+	Ack       MessageType = "ack"
 )
 
 type Member struct {
-	IP        	string 	`json:"ip"`
-	Port      	int    	`json:"port"`
-	Timestamp 	string 	`json:"timestamp"`
-	Heartbeat 	int    	`json:"heartbeat"`
-	LastUpdated int  	`json:"lastUpdated"`
-	Status    	Status 	`json:"status"`
+	IP          string `json:"ip"`
+	Port        int    `json:"port"`
+	Timestamp   string `json:"timestamp"`
+	Heartbeat   int    `json:"heartbeat"`
+	LastUpdated int    `json:"lastUpdated"`
+	Status      Status `json:"status"`
 }
 
 type Message struct {
@@ -44,17 +46,19 @@ type Message struct {
 }
 
 const (
-	SelfPort     = 1234
+	SelfPort = 1234
+	// Replace with corresponding host
 	SelfHost       = "fa25-cs425-9501.cs.illinois.edu"
 	IntroducerHost = "fa25-cs425-9501.cs.illinois.edu"
 	IntroducerPort = 1234
-	Tsuspect      = 5
-	Tfail         = 5
-	Tcleanup      = 5
-	K			  = 3
+	Tsuspect       = 5
+	Tfail          = 5
+	Tcleanup       = 5
+	K              = 3
 )
 
 var membershipList sync.Map
+var ackList sync.Map
 var selfId string
 var tick int
 
@@ -73,21 +77,21 @@ func snapshotMembers(omitFailed bool) map[string]Member {
 }
 
 func selectKMembers(members map[string]Member, k int) []Member {
-    slice := make([]Member, 0, len(members))
-    for _, m := range members {
-        slice = append(slice, m)
-    }
+	slice := make([]Member, 0, len(members))
+	for _, m := range members {
+		slice = append(slice, m)
+	}
 
-    // Fewer than k members
-    if len(slice) <= k {
-        return slice
-    }
+	// Fewer than k members
+	if len(slice) <= k {
+		return slice
+	}
 
-    rand.Shuffle(len(slice), func(i, j int) {
-        slice[i], slice[j] = slice[j], slice[i]
-    })
+	rand.Shuffle(len(slice), func(i, j int) {
+		slice[i], slice[j] = slice[j], slice[i]
+	})
 
-    return slice[:k]
+	return slice[:k]
 }
 
 func mergeMembershipList(members map[string]Member) {
@@ -95,15 +99,14 @@ func mergeMembershipList(members map[string]Member) {
 		v, ok := membershipList.Load(id)
 		if !ok { // New member
 			newMember := Member{
-				IP:         	m.IP,
-				Port:       	m.Port,
-				Timestamp:  	m.Timestamp,
-				Heartbeat:  	m.Heartbeat,
-				LastUpdated: 	tick,
-				Status:     	m.Status,
+				IP:          m.IP,
+				Port:        m.Port,
+				Timestamp:   m.Timestamp,
+				Heartbeat:   m.Heartbeat,
+				LastUpdated: tick,
+				Status:      m.Status,
 			}
 			membershipList.Store(id, newMember)
-			continue
 		} else { // Existing member
 			existing := v.(Member)
 			if m.Heartbeat > existing.Heartbeat {
@@ -117,7 +120,7 @@ func mergeMembershipList(members map[string]Member) {
 					existing.Status = Suspected
 					existing.LastUpdated = tick
 					membershipList.Store(id, existing)
-				} 
+				}
 			}
 		}
 	}
@@ -147,16 +150,15 @@ func listenUDP(conn *net.UDPConn) {
 			log.Printf("unmarshal from %v: %v", raddr, err)
 			continue
 		}
-		
 		handleMessage(conn, &msg)
 	}
 }
 
 func gossip(conn *net.UDPConn, interval time.Duration) {
-    ticker := time.NewTicker(interval)
-    defer ticker.Stop()
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
 
-    for range ticker.C {
+	for range ticker.C {
 		tick++
 
 		// Increment self heartbeat
@@ -186,7 +188,7 @@ func gossip(conn *net.UDPConn, interval time.Duration) {
 			return true
 		})
 
-		// Select k random members to gossip to (exlude self)
+		// Select K random members to gossip to (exlude self)
 		members := snapshotMembers(true)
 		delete(members, selfId)
 		targets := selectKMembers(members, K)
@@ -205,53 +207,154 @@ func gossip(conn *net.UDPConn, interval time.Duration) {
 				Members:     members,
 			}
 			sendUDP(conn, targetAddr, &msg)
-			log.Printf("sent %s to %s", MessageType(Gossip), keyFor(target))
+			log.Printf("sent %s to %s", msg.MessageType, keyFor(target))
 		}
-    }
+	}
+}
+
+func ping(conn *net.UDPConn, interval time.Duration) {
+	// In each round,
+	// 1. Shuffle nodes
+	// 2. Wait for some amount of time for ACK to come back
+	// 3. If that time passes, ping K other nodes simultaneously
+	// 4. If atleast one ACK comes back before protocol period ends, mark that node as alive, else suspect
+	// 5. Do this for all nodes in the shuffled list
+	// 6. Next round
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	for { // each round
+		// Shuffle nodes
+		members := snapshotMembers(true)
+		delete(members, selfId)
+
+		slice := make([]Member, 0, len(members))
+		for _, m := range members {
+			slice = append(slice, m)
+		}
+
+		rand.Shuffle(len(slice), func(i, j int) {
+			slice[i], slice[j] = slice[j], slice[i]
+		})
+
+		for _, target := range slice { // each protocol period
+			// Wait for tick
+			<-ticker.C
+			tick++
+			v, _ := membershipList.Load(selfId)
+			self := v.(Member)
+			self.Heartbeat++
+			self.LastUpdated = tick // Not really needed, but whatever
+			membershipList.Store(selfId, self)
+
+			// Send ping to target
+			targetAddr, err := net.ResolveUDPAddr("udp", fmt.Sprintf("%s:%d", target.IP, target.Port))
+			if err != nil {
+				log.Printf("resolve target: %v", err)
+				continue
+			}
+			msg := Message{
+				MessageType: Ping,
+				Self:        &self,
+				Members:     nil, // omitted due to ,omitempty
+			}
+			sendUDP(conn, targetAddr, &msg)
+			log.Printf("sent %s to %s", msg.MessageType, keyFor(target))
+
+			acked := false
+
+			for i := 1; i < Tsuspect; i++ { // Wait Tsuspect for direct ACK from target
+				<-ticker.C
+				tick++
+
+				if temp, ok := ackList.Load(keyFor(target)); ok {
+					value := temp.(Member)
+					if value.Heartbeat > target.Heartbeat {
+						acked = true
+						target.Heartbeat = value.Heartbeat
+						target.Status = Alive
+						target.LastUpdated = tick
+						membershipList.Store(keyFor(target), target)
+						break
+					}
+				}
+			}
+
+			if !acked {
+				target.Status = Suspected
+				target.LastUpdated = tick
+				membershipList.Store(keyFor(target), target)
+			}
+
+			if !acked {
+				for i := 1; i < Tfail; i++ { // Wait for Tfail more ticks before deleting target from membershipList
+					<-ticker.C
+					tick++
+
+					if temp, ok := ackList.Load(keyFor(target)); ok {
+						value := temp.(Member)
+						if value.Heartbeat > target.Heartbeat {
+							acked = true
+							target.Heartbeat = value.Heartbeat
+							target.Status = Alive
+							target.LastUpdated = tick
+							membershipList.Store(keyFor(target), target)
+							break
+						}
+					}
+				}
+
+				if !acked {
+					membershipList.Delete(keyFor(target))
+				}
+			}
+		}
+	}
 }
 
 func handleMessage(conn *net.UDPConn, msg *Message) {
+	// TODO: simulate message loss
 	log.Printf("recv %s from %s", msg.MessageType, keyFor(*msg.Self))
 
 	switch msg.MessageType {
-		case JoinReq:
-			// Send JoinReply with current membership list
-			members := snapshotMembers(true)
-			v, _ := membershipList.Load(selfId)
-			self := v.(Member)
+	case JoinReq:
+		// Send JoinReply with current membership list
+		members := snapshotMembers(true)
+		v, _ := membershipList.Load(selfId)
+		self := v.(Member)
 
-			reply := Message{
-				MessageType: JoinReply,
-				Self:        &self,
-				Members:     members,
-			}
-			senderAddr, err := net.ResolveUDPAddr("udp", fmt.Sprintf("%s:%d", msg.Self.IP, msg.Self.Port))
-			if err != nil {
-				log.Printf("resolve sender: %v", err)
-				return
-			}
-			sendUDP(conn, senderAddr, &reply)
-			log.Printf("sent %s to %s", reply.MessageType, keyFor(*msg.Self))
+		reply := Message{
+			MessageType: JoinReply,
+			Self:        &self,
+			Members:     members,
+		}
+		senderAddr, err := net.ResolveUDPAddr("udp", fmt.Sprintf("%s:%d", msg.Self.IP, msg.Self.Port))
+		if err != nil {
+			log.Printf("resolve sender: %v", err)
+			return
+		}
+		sendUDP(conn, senderAddr, &reply)
+		log.Printf("sent %s to %s", reply.MessageType, keyFor(*msg.Self))
 
-		case Gossip:
-			mergeMembershipList(msg.Members)
+	case Gossip:
+		mergeMembershipList(msg.Members)
 
-		case JoinReply:
-			mergeMembershipList(msg.Members)
+	case JoinReply:
+		mergeMembershipList(msg.Members)
 
+	case Ping:
+		// See if pinger is in membership list, if not add
+		mergeMembershipList(map[string]Member{keyFor(*msg.Self): *msg.Self})
 	}
 }
 
 func main() {
-	// Set seed for random
-	rand.Seed(time.Now().UnixNano())
-
 	// Set log file for output
 	f, err := os.OpenFile("machine.log", os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
-    if err != nil {
-        log.Fatalf("error opening log file: %v", err)
-    }
-    defer f.Close()
+	if err != nil {
+		log.Fatalf("error opening log file: %v", err)
+	}
+	defer f.Close()
 	log.SetOutput(f)
 
 	// Bind locally on all interfaces :SelfPort
@@ -265,7 +368,7 @@ func main() {
 	}
 	defer conn.Close()
 
-    // Add self to membership list
+	// Add self to membership list
 	self := Member{
 		IP:        SelfHost,
 		Port:      SelfPort,
@@ -295,7 +398,10 @@ func main() {
 	}
 
 	// Gossip
-	go gossip(conn, 5*time.Second)
+	// go gossip(conn, 5*time.Second)
+	go ping(conn, 5*time.Second)
+
+	// Ping/Ack
 
 	select {}
 }

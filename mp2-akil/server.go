@@ -345,6 +345,46 @@ func handleMessage(conn *net.UDPConn, msg *Message) {
 	case Ping:
 		// See if pinger is in membership list, if not add
 		mergeMembershipList(map[string]Member{keyFor(*msg.Self): *msg.Self})
+		// Also add in ackList, because we got a direct ping from them, but only if heartbeat is higher
+		if v, ok := ackList.Load(keyFor(*msg.Self)); ok {
+			value := v.(Member)
+			if msg.Self.Heartbeat > value.Heartbeat {
+				ackList.Store(keyFor(*msg.Self), *msg.Self)
+			}
+		} else {
+			ackList.Store(keyFor(*msg.Self), *msg.Self)
+		}
+
+		v, _ := membershipList.Load(selfId)
+		self := v.(Member)
+		self.Heartbeat++
+		self.LastUpdated = tick
+		membershipList.Store(selfId, self)
+
+		// Send Ack
+		ack := Message{
+			MessageType: Ack,
+			Self:        &self,
+			Members:     nil, // omitted due to ,omitempty
+		}
+		senderAddr, err := net.ResolveUDPAddr("udp", fmt.Sprintf("%s:%d", msg.Self.IP, msg.Self.Port))
+		if err != nil {
+			log.Printf("resolve sender: %v", err)
+			return
+		}
+		sendUDP(conn, senderAddr, &ack)
+		log.Printf("sent %s to %s", ack.MessageType, keyFor(*msg.Self))
+
+	case Ack:
+		// Add to ackList, but only if heartbeat is higher
+		if v, ok := ackList.Load(keyFor(*msg.Self)); ok {
+			value := v.(Member)
+			if msg.Self.Heartbeat > value.Heartbeat {
+				ackList.Store(keyFor(*msg.Self), *msg.Self)
+			}
+		} else {
+			ackList.Store(keyFor(*msg.Self), *msg.Self)
+		}
 	}
 }
 

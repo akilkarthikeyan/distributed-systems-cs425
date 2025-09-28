@@ -11,6 +11,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -59,8 +60,8 @@ const (
 	K              = 3
 )
 
-var Protocol = "ping"       // or "gossip"
-var SuspectMode = "suspect" // or "nosuspect"
+var Protocol atomic.Value    // "ping "or "gossip"
+var SuspectMode atomic.Value // "suspect" or "nosuspect"
 
 var membershipList sync.Map
 var ackList sync.Map
@@ -166,7 +167,7 @@ func gossip(conn *net.UDPConn, interval time.Duration) {
 
 	for range ticker.C {
 		// If protocol is ping, end gossip
-		if Protocol == "ping" {
+		if Protocol.Load() == "ping" {
 			fmt.Println("[GOSSIP STOP] Switching to ping protocol")
 			return
 		}
@@ -253,7 +254,7 @@ func ping(conn *net.UDPConn, interval time.Duration) {
 			// Wait for tick
 			<-ticker.C
 			// If protocol is gossip, end ping
-			if Protocol == "gossip" {
+			if Protocol.Load() == "gossip" {
 				fmt.Println("[PING STOP] Switching to gossip protocol")
 				return
 			}
@@ -283,7 +284,7 @@ func ping(conn *net.UDPConn, interval time.Duration) {
 			for i := 1; i < Tsuspect; i++ { // Wait Tsuspect for direct ACK from target
 				<-ticker.C
 				// If protocol is gossip, end ping
-				if Protocol == "gossip" {
+				if Protocol.Load() == "gossip" {
 					fmt.Println("[PING STOP] Switching to gossip protocol")
 					return
 				}
@@ -313,7 +314,7 @@ func ping(conn *net.UDPConn, interval time.Duration) {
 				for i := 1; i < Tfail; i++ { // Wait for Tfail more ticks before deleting target from membershipList
 					<-ticker.C
 					// If protocol is gossip, end ping
-					if Protocol == "gossip" {
+					if Protocol.Load() == "gossip" {
 						fmt.Println("[PING STOP] Switching to gossip protocol")
 						return
 					}
@@ -436,6 +437,10 @@ func main() {
 	}
 	defer conn.Close()
 
+	// Set initial Protocol and SuspectMode
+	Protocol.Store("ping")
+	SuspectMode.Store("nosuspect")
+
 	// Add self to membership list
 	self := Member{
 		IP:        SelfHost,
@@ -514,8 +519,8 @@ func handleCommand(line string) {
 			return
 		}
 
-		Protocol = proto
-		SuspectMode = mode
+		Protocol.Store(proto)
+		SuspectMode.Store(mode)
 
 	case "display_protocol":
 		fmt.Println("display_protocol")
@@ -536,3 +541,4 @@ func handleCommand(line string) {
 
 // TODO: switch {gossip|ping} {suspect|nosuspect} !!!
 // TODO: display_protocol - output {gossip|ping} {suspect|nosuspect}
+// TODO: variable message drop rate

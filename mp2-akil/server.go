@@ -180,8 +180,12 @@ func broadcastSwitch(conn *net.UDPConn) {
 	proto := Protocol.Load()
 	mode := SuspectMode.Load()
 
+	v, _ := membershipList.Load(selfId)
+	self := v.(Member)
+
 	msg := Message{
 		MessageType: Switch,
+		Self:        &self,
 		SwitchTo: &ProtocolAndSuspectMode{
 			Protocol:    proto.(string),
 			SuspectMode: mode.(string),

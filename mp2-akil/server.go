@@ -2,12 +2,14 @@
 package main
 
 import (
+	"bufio"
 	"encoding/json"
 	"fmt"
 	"log"
 	"math/rand"
 	"net"
 	"os"
+	"strings"
 	"sync"
 	"time"
 )
@@ -120,6 +122,7 @@ func mergeMembershipList(members map[string]Member) {
 					existing.Status = Suspected
 					existing.LastUpdated = tick
 					membershipList.Store(id, existing)
+					fmt.Printf("[SUSPECT - gossip] %s marked suspected at tick %d\n", id, tick)
 				}
 			}
 		}
@@ -178,6 +181,7 @@ func gossip(conn *net.UDPConn, interval time.Duration) {
 				m.Status = Suspected
 				m.LastUpdated = tick
 				membershipList.Store(k.(string), m)
+				fmt.Printf("[SUSPECT - timeout] %s marked suspected at tick %d\n", k.(string), tick)
 			} else if m.Status == Suspected && elapsed >= Tfail {
 				m.Status = Failed
 				m.LastUpdated = tick
@@ -284,6 +288,7 @@ func ping(conn *net.UDPConn, interval time.Duration) {
 				target.Status = Suspected
 				target.LastUpdated = tick
 				membershipList.Store(keyFor(target), target)
+				fmt.Printf("[SUSPECT - ack timeout] %s marked suspected at tick %d\n", keyFor(target), tick)
 			}
 
 			if !acked {
@@ -439,9 +444,60 @@ func main() {
 
 	// Gossip
 	// go gossip(conn, 5*time.Second)
-	go ping(conn, 5*time.Second)
 
 	// Ping/Ack
+	go ping(conn, 5*time.Second)
 
-	select {}
+	scanner := bufio.NewScanner(os.Stdin)
+	for scanner.Scan() {
+		line := scanner.Text()
+		handleCommand(line)
+	}
+	if err := scanner.Err(); err != nil {
+		fmt.Printf("stdin error: %v\n", err)
+	}
 }
+
+func handleCommand(line string) {
+	fields := strings.Fields(line)
+	if len(fields) == 0 {
+		return
+	}
+
+	switch fields[0] {
+	case "list_mem":
+		members := snapshotMembers(false)
+		fmt.Printf("Membership List:\n")
+		for id, m := range members {
+			fmt.Printf("%s - Status: %s, Heartbeat: %d, LastUpdated: %d\n", id, m.Status, m.Heartbeat, m.LastUpdated)
+		}
+
+	case "list_self":
+		fmt.Println(selfId)
+
+	case "switch":
+		fmt.Println("switch")
+
+	case "display_protocol":
+		fmt.Println("display_protocol")
+
+	case "display_suspects":
+		members := snapshotMembers(false)
+		fmt.Printf("Suspected Members:\n")
+		for id, m := range members {
+			if m.Status == Suspected {
+				fmt.Printf("%s - Status: %s, Heartbeat: %d, LastUpdated: %d\n", id, m.Status, m.Heartbeat, m.LastUpdated)
+			}
+		}
+
+	default:
+		fmt.Println("Unknown command:", line)
+	}
+}
+
+// TODO: list_mem - list membership list
+// TODO: list_self - list self's id
+// TODO: switch {gossip|ping} {suspect|nosuspect} !!!
+// TODO: display_protocol - output {gossip|ping} {suspect|nosuspect}
+// TODO: display_suspects
+// TODO: whenever a node is marked suspected, print to log

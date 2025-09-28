@@ -1,3 +1,3 @@
-module mp2-akil
+module mp2
 
 go 1.24.6

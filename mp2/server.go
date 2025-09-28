@@ -534,6 +534,7 @@ func main() {
 	}
 	defer f.Close()
 	log.SetOutput(f)
+	log.SetFlags(log.LstdFlags | log.Lmicroseconds)
 
 	// Get self hostname
 	hostname, err := os.Hostname()

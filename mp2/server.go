@@ -65,7 +65,7 @@ const (
 	Tfail          = 5
 	Tcleanup       = 5
 	K              = 3
-	TimeUnit       = time.Second
+	TimeUnit       = time.Millisecond * 25
 )
 
 var SelfHost string

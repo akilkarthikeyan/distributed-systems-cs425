@@ -9,6 +9,7 @@ import (
 	"math/rand"
 	"net"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -57,8 +58,7 @@ type Message struct {
 
 const (
 	SelfPort = 1234
-	// Replace with corresponding host
-	SelfHost       = "fa25-cs425-9501.cs.illinois.edu"
+	// SelfHost       = "fa25-cs425-9501.cs.illinois.edu"
 	IntroducerHost = "fa25-cs425-9501.cs.illinois.edu"
 	IntroducerPort = 1234
 	Tsuspect       = 5
@@ -68,8 +68,10 @@ const (
 	TimeUnit       = time.Second
 )
 
+var SelfHost string
 var Protocol atomic.Value    // "ping "or "gossip"
 var SuspectMode atomic.Value // "suspect" or "nosuspect"
+var FailureRate float64 = 0.0
 
 var membershipList sync.Map
 var ackList sync.Map
@@ -414,7 +416,11 @@ func ping(conn *net.UDPConn, interval time.Duration) {
 }
 
 func handleMessage(conn *net.UDPConn, msg *Message) {
-	// TODO: simulate message loss
+	// Simulate message drop
+	if rand.Float64() < FailureRate {
+		return
+	}
+
 	log.Printf("recv %s from %s", msg.MessageType, keyFor(*msg.Self))
 
 	switch msg.MessageType {
@@ -529,6 +535,13 @@ func main() {
 	defer f.Close()
 	log.SetOutput(f)
 
+	// Get self hostname
+	hostname, err := os.Hostname()
+	if err != nil {
+		log.Fatalf("get hostname: %v", err)
+	}
+	SelfHost = hostname
+
 	// Bind locally on all interfaces :SelfPort
 	listenAddr, err := net.ResolveUDPAddr("udp", fmt.Sprintf(":%d", SelfPort))
 	if err != nil {
@@ -540,9 +553,30 @@ func main() {
 	}
 	defer conn.Close()
 
-	// Set initial Protocol and SuspectMode
-	Protocol.Store("ping")
-	SuspectMode.Store("nosuspect")
+	// Set initial Protocol, SuspectMode and FailureRate
+	args := os.Args
+	args = args[1:]
+
+	if len(args) >= 1 {
+		FailureRate, err = strconv.ParseFloat(args[0], 64)
+		if err != nil || FailureRate < 0.0 || FailureRate > 1.0 {
+			fmt.Printf("invalid failure rate: %v\n", args[0])
+		}
+	}
+	if len(args) == 3 {
+		if args[1] == "gossip" || args[1] == "ping" {
+			Protocol.Store(args[1])
+		} else {
+			fmt.Printf("invalid protocol: %v\n", args[1])
+			Protocol.Store("ping")
+		}
+		if args[2] == "suspect" || args[2] == "nosuspect" {
+			SuspectMode.Store(args[2])
+		} else {
+			fmt.Printf("invalid suspect mode: %v\n", args[2])
+			SuspectMode.Store("nosuspect")
+		}
+	}
 
 	// Add self to membership list
 	self := Member{
@@ -577,7 +611,13 @@ func main() {
 	// go gossip(conn, TimeUnit)
 
 	// Ping/Ack
-	go ping(conn, TimeUnit)
+	// go ping(conn, TimeUnit)
+
+	if Protocol.Load() == "gossip" {
+		go gossip(conn, TimeUnit)
+	} else {
+		go ping(conn, TimeUnit)
+	}
 
 	scanner := bufio.NewScanner(os.Stdin)
 	for scanner.Scan() {
@@ -667,5 +707,3 @@ func handleCommand(line string, conn *net.UDPConn) {
 		fmt.Println("Unknown command:", line)
 	}
 }
-
-// TODO: variable message drop rate

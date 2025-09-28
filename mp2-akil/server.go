@@ -59,6 +59,9 @@ const (
 	K              = 3
 )
 
+var Protocol = "ping"       // or "gossip"
+var SuspectMode = "suspect" // or "nosuspect"
+
 var membershipList sync.Map
 var ackList sync.Map
 var selfId string
@@ -162,6 +165,11 @@ func gossip(conn *net.UDPConn, interval time.Duration) {
 	defer ticker.Stop()
 
 	for range ticker.C {
+		// If protocol is ping, end gossip
+		if Protocol == "ping" {
+			fmt.Println("[GOSSIP STOP] Switching to ping protocol")
+			return
+		}
 		tick++
 
 		// Increment self heartbeat
@@ -244,6 +252,11 @@ func ping(conn *net.UDPConn, interval time.Duration) {
 		for _, target := range slice { // each protocol period
 			// Wait for tick
 			<-ticker.C
+			// If protocol is gossip, end ping
+			if Protocol == "gossip" {
+				fmt.Println("[PING STOP] Switching to gossip protocol")
+				return
+			}
 			tick++
 			v, _ := membershipList.Load(selfId)
 			self := v.(Member)
@@ -269,6 +282,11 @@ func ping(conn *net.UDPConn, interval time.Duration) {
 
 			for i := 1; i < Tsuspect; i++ { // Wait Tsuspect for direct ACK from target
 				<-ticker.C
+				// If protocol is gossip, end ping
+				if Protocol == "gossip" {
+					fmt.Println("[PING STOP] Switching to gossip protocol")
+					return
+				}
 				tick++
 
 				if temp, ok := ackList.Load(keyFor(target)); ok {
@@ -294,6 +312,11 @@ func ping(conn *net.UDPConn, interval time.Duration) {
 			if !acked {
 				for i := 1; i < Tfail; i++ { // Wait for Tfail more ticks before deleting target from membershipList
 					<-ticker.C
+					// If protocol is gossip, end ping
+					if Protocol == "gossip" {
+						fmt.Println("[PING STOP] Switching to gossip protocol")
+						return
+					}
 					tick++
 
 					if temp, ok := ackList.Load(keyFor(target)); ok {
@@ -476,7 +499,23 @@ func handleCommand(line string) {
 		fmt.Println(selfId)
 
 	case "switch":
-		fmt.Println("switch")
+		if len(fields) != 3 {
+			fmt.Println("Usage: switch {gossip|ping} {suspect|nosuspect}")
+			return
+		}
+		proto := fields[1]
+		mode := fields[2]
+		if proto != "gossip" && proto != "ping" {
+			fmt.Println("Invalid protocol:", proto)
+			return
+		}
+		if mode != "suspect" && mode != "nosuspect" {
+			fmt.Println("Invalid mode:", mode)
+			return
+		}
+
+		Protocol = proto
+		SuspectMode = mode
 
 	case "display_protocol":
 		fmt.Println("display_protocol")
@@ -495,9 +534,5 @@ func handleCommand(line string) {
 	}
 }
 
-// TODO: list_mem - list membership list
-// TODO: list_self - list self's id
 // TODO: switch {gossip|ping} {suspect|nosuspect} !!!
 // TODO: display_protocol - output {gossip|ping} {suspect|nosuspect}
-// TODO: display_suspects
-// TODO: whenever a node is marked suspected, print to log

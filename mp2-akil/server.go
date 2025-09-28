@@ -58,6 +58,7 @@ const (
 	Tfail          = 5
 	Tcleanup       = 5
 	K              = 3
+	TimeUnit       = time.Second
 )
 
 var Protocol atomic.Value    // "ping "or "gossip"
@@ -471,22 +472,22 @@ func main() {
 	}
 
 	// Gossip
-	// go gossip(conn, 5*time.Second)
+	// go gossip(conn, TimeUnit)
 
 	// Ping/Ack
-	go ping(conn, 5*time.Second)
+	go ping(conn, TimeUnit)
 
 	scanner := bufio.NewScanner(os.Stdin)
 	for scanner.Scan() {
 		line := scanner.Text()
-		handleCommand(line)
+		handleCommand(line, conn)
 	}
 	if err := scanner.Err(); err != nil {
 		fmt.Printf("stdin error: %v\n", err)
 	}
 }
 
-func handleCommand(line string) {
+func handleCommand(line string, conn *net.UDPConn) {
 	fields := strings.Fields(line)
 	if len(fields) == 0 {
 		return
@@ -519,8 +520,17 @@ func handleCommand(line string) {
 			return
 		}
 
+		old := Protocol.Load()
 		Protocol.Store(proto)
 		SuspectMode.Store(mode)
+
+		if old != proto {
+			if proto == "gossip" {
+				go gossip(conn, TimeUnit)
+			} else {
+				go ping(conn, TimeUnit)
+			}
+		}
 
 	case "display_protocol":
 		fmt.Println("display_protocol")

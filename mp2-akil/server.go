@@ -563,18 +563,16 @@ func main() {
 			fmt.Printf("invalid failure rate: %v\n", args[0])
 		}
 	}
+
+	Protocol.Store("ping")
+	SuspectMode.Store("nosuspect")
+
 	if len(args) == 3 {
-		if args[1] == "gossip" || args[1] == "ping" {
+		if (args[1] == "gossip" || args[1] == "ping") && (args[2] == "suspect" || args[2] == "nosuspect") {
 			Protocol.Store(args[1])
-		} else {
-			fmt.Printf("invalid protocol: %v\n", args[1])
-			Protocol.Store("ping")
-		}
-		if args[2] == "suspect" || args[2] == "nosuspect" {
 			SuspectMode.Store(args[2])
 		} else {
-			fmt.Printf("invalid suspect mode: %v\n", args[2])
-			SuspectMode.Store("nosuspect")
+			fmt.Printf("invalid protocol or suspect mode: %v %v\n", args[1], args[2])
 		}
 	}
 

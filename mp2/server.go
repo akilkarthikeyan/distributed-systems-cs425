@@ -245,16 +245,20 @@ func gossip(conn *net.UDPConn, interval time.Duration) {
 					m.Status = Failed
 					m.LastUpdated = tick
 					membershipList.Store(k.(string), m)
+					fmt.Printf("[FAIL] %s marked failed at tick %d\n", k.(string), tick)
 				} else if m.Status == Failed && elapsed >= Tcleanup {
 					membershipList.Delete(k.(string))
+					fmt.Printf("[DELETE] %s removed from membership list at tick %d\n", k.(string), tick)
 				}
 			} else {
 				if m.Status == Alive && elapsed >= Tfail {
 					m.Status = Failed
 					m.LastUpdated = tick
 					membershipList.Store(k.(string), m)
+					fmt.Printf("[FAIL] %s marked failed at tick %d\n", k.(string), tick)
 				} else if m.Status == Failed && elapsed >= Tcleanup {
 					membershipList.Delete(k.(string))
+					fmt.Printf("[DELETE] %s removed from membership list at tick %d\n", k.(string), tick)
 				}
 			}
 			return true
@@ -409,6 +413,7 @@ func ping(conn *net.UDPConn, interval time.Duration) {
 
 				if !acked {
 					membershipList.Delete(keyFor(target))
+					fmt.Printf("[DELETE] %s removed from membership list at tick %d\n", keyFor(target), tick)
 				}
 			}
 		}

@@ -1,3 +1,3 @@
-module CS425MP
+module mp2-akil
 
-go 1.25.0
+go 1.24.6

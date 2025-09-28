@@ -31,7 +31,13 @@ const (
 	JoinReply MessageType = "join-reply"
 	Ping      MessageType = "ping"
 	Ack       MessageType = "ack"
+	Switch    MessageType = "switch"
 )
+
+type ProtocolAndSuspectMode struct {
+	Protocol    string `json:"protocol"`
+	SuspectMode string `json:"suspectMode"`
+}
 
 type Member struct {
 	IP          string `json:"ip"`
@@ -43,9 +49,10 @@ type Member struct {
 }
 
 type Message struct {
-	MessageType MessageType       `json:"messageType"`
-	Self        *Member           `json:"self,omitempty"`
-	Members     map[string]Member `json:"members,omitempty"`
+	MessageType MessageType             `json:"messageType"`
+	Self        *Member                 `json:"self,omitempty"`
+	Members     map[string]Member       `json:"members,omitempty"`
+	SwitchTo    *ProtocolAndSuspectMode `json:"switchTo,omitempty"`
 }
 
 const (
@@ -105,6 +112,10 @@ func mergeMembershipList(members map[string]Member) {
 	for id, m := range members {
 		v, ok := membershipList.Load(id)
 		if !ok { // New member
+			// If suspect mode is nosuspect, add as alive
+			if SuspectMode.Load() == "nosuspect" {
+				m.Status = Alive
+			}
 			newMember := Member{
 				IP:          m.IP,
 				Port:        m.Port,
@@ -123,7 +134,7 @@ func mergeMembershipList(members map[string]Member) {
 				membershipList.Store(id, existing)
 			}
 			if m.Heartbeat == existing.Heartbeat {
-				if m.Status == Suspected && existing.Status == Alive {
+				if SuspectMode.Load() == "suspect" && m.Status == Suspected && existing.Status == Alive {
 					existing.Status = Suspected
 					existing.LastUpdated = tick
 					membershipList.Store(id, existing)
@@ -162,14 +173,45 @@ func listenUDP(conn *net.UDPConn) {
 	}
 }
 
+func broadcastSwitch(conn *net.UDPConn) {
+	members := snapshotMembers(true)
+	delete(members, selfId)
+
+	proto := Protocol.Load()
+	mode := SuspectMode.Load()
+
+	msg := Message{
+		MessageType: Switch,
+		SwitchTo: &ProtocolAndSuspectMode{
+			Protocol:    proto.(string),
+			SuspectMode: mode.(string),
+		},
+	}
+
+	for _, target := range members {
+		targetAddr, err := net.ResolveUDPAddr("udp", fmt.Sprintf("%s:%d", target.IP, target.Port))
+		if err != nil {
+			log.Printf("resolve target: %v", err)
+			continue
+		}
+		sendUDP(conn, targetAddr, &msg)
+		log.Printf("sent %s to %s", msg.MessageType, keyFor(target))
+	}
+}
+
 func gossip(conn *net.UDPConn, interval time.Duration) {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
+	startMode := SuspectMode.Load() // mode at start of goroutine
 
 	for range ticker.C {
-		// If protocol is ping, end gossip
-		if Protocol.Load() == "ping" {
-			fmt.Println("[GOSSIP STOP] Switching to ping protocol")
+		// End goroutine if protocol changes or suspect mode changes
+		if Protocol.Load() == "ping" || startMode != SuspectMode.Load() {
+			if Protocol.Load() == "ping" {
+				fmt.Println("[GOSSIP STOP] Switching to ping protocol")
+			} else {
+				fmt.Println("[GOSSIP STOP] Suspect mode changed, restarting goroutine")
+			}
 			return
 		}
 		tick++
@@ -187,17 +229,27 @@ func gossip(conn *net.UDPConn, interval time.Duration) {
 		membershipList.Range(func(k, v any) bool {
 			m := v.(Member)
 			elapsed := tick - m.LastUpdated
-			if m.Status == Alive && elapsed >= Tsuspect {
-				m.Status = Suspected
-				m.LastUpdated = tick
-				membershipList.Store(k.(string), m)
-				fmt.Printf("[SUSPECT - timeout] %s marked suspected at tick %d\n", k.(string), tick)
-			} else if m.Status == Suspected && elapsed >= Tfail {
-				m.Status = Failed
-				m.LastUpdated = tick
-				membershipList.Store(k.(string), m)
-			} else if m.Status == Failed && elapsed >= Tcleanup {
-				membershipList.Delete(k.(string))
+			if startMode == "suspect" {
+				if m.Status == Alive && elapsed >= Tsuspect {
+					m.Status = Suspected
+					m.LastUpdated = tick
+					membershipList.Store(k.(string), m)
+					fmt.Printf("[SUSPECT - timeout] %s marked suspected at tick %d\n", k.(string), tick)
+				} else if m.Status == Suspected && elapsed >= Tfail {
+					m.Status = Failed
+					m.LastUpdated = tick
+					membershipList.Store(k.(string), m)
+				} else if m.Status == Failed && elapsed >= Tcleanup {
+					membershipList.Delete(k.(string))
+				}
+			} else {
+				if m.Status == Alive && elapsed >= Tfail {
+					m.Status = Failed
+					m.LastUpdated = tick
+					membershipList.Store(k.(string), m)
+				} else if m.Status == Failed && elapsed >= Tcleanup {
+					membershipList.Delete(k.(string))
+				}
 			}
 			return true
 		})
@@ -236,6 +288,7 @@ func ping(conn *net.UDPConn, interval time.Duration) {
 	// 6. Next round
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
+	startMode := SuspectMode.Load() // mode at start of goroutine
 
 	for { // each round
 		// Shuffle nodes
@@ -254,9 +307,13 @@ func ping(conn *net.UDPConn, interval time.Duration) {
 		for _, target := range slice { // each protocol period
 			// Wait for tick
 			<-ticker.C
-			// If protocol is gossip, end ping
-			if Protocol.Load() == "gossip" {
-				fmt.Println("[PING STOP] Switching to gossip protocol")
+			// End goroutine if protocol changes or suspect mode changes
+			if Protocol.Load() == "gossip" || startMode != SuspectMode.Load() {
+				if Protocol.Load() == "gossip" {
+					fmt.Println("[PING STOP] Switching to gossip protocol")
+				} else {
+					fmt.Println("[PING STOP] Suspect mode changed, restarting goroutine")
+				}
 				return
 			}
 			tick++
@@ -282,41 +339,51 @@ func ping(conn *net.UDPConn, interval time.Duration) {
 
 			acked := false
 
-			for i := 1; i < Tsuspect; i++ { // Wait Tsuspect for direct ACK from target
-				<-ticker.C
-				// If protocol is gossip, end ping
-				if Protocol.Load() == "gossip" {
-					fmt.Println("[PING STOP] Switching to gossip protocol")
-					return
-				}
-				tick++
+			if startMode == "suspect" {
+				for i := 1; i < Tsuspect; i++ { // Wait Tsuspect for direct ACK from target
+					<-ticker.C
+					// End goroutine if protocol changes or suspect mode changes
+					if Protocol.Load() == "gossip" || startMode != SuspectMode.Load() {
+						if Protocol.Load() == "gossip" {
+							fmt.Println("[PING STOP] Switching to gossip protocol")
+						} else {
+							fmt.Println("[PING STOP] Suspect mode changed, restarting goroutine")
+						}
+						return
+					}
+					tick++
 
-				if temp, ok := ackList.Load(keyFor(target)); ok {
-					value := temp.(Member)
-					if value.Heartbeat > target.Heartbeat {
-						acked = true
-						target.Heartbeat = value.Heartbeat
-						target.Status = Alive
-						target.LastUpdated = tick
-						membershipList.Store(keyFor(target), target)
-						break
+					if temp, ok := ackList.Load(keyFor(target)); ok {
+						value := temp.(Member)
+						if value.Heartbeat > target.Heartbeat {
+							acked = true
+							target.Heartbeat = value.Heartbeat
+							target.Status = Alive
+							target.LastUpdated = tick
+							membershipList.Store(keyFor(target), target)
+							break
+						}
 					}
 				}
-			}
 
-			if !acked {
-				target.Status = Suspected
-				target.LastUpdated = tick
-				membershipList.Store(keyFor(target), target)
-				fmt.Printf("[SUSPECT - ack timeout] %s marked suspected at tick %d\n", keyFor(target), tick)
+				if !acked {
+					target.Status = Suspected
+					target.LastUpdated = tick
+					membershipList.Store(keyFor(target), target)
+					fmt.Printf("[SUSPECT - ack timeout] %s marked suspected at tick %d\n", keyFor(target), tick)
+				}
 			}
 
 			if !acked {
 				for i := 1; i < Tfail; i++ { // Wait for Tfail more ticks before deleting target from membershipList
 					<-ticker.C
-					// If protocol is gossip, end ping
-					if Protocol.Load() == "gossip" {
-						fmt.Println("[PING STOP] Switching to gossip protocol")
+					// End goroutine if protocol changes or suspect mode changes
+					if Protocol.Load() == "gossip" || startMode != SuspectMode.Load() {
+						if Protocol.Load() == "gossip" {
+							fmt.Println("[PING STOP] Switching to gossip protocol")
+						} else {
+							fmt.Println("[PING STOP] Suspect mode changed, restarting goroutine")
+						}
 						return
 					}
 					tick++
@@ -414,6 +481,37 @@ func handleMessage(conn *net.UDPConn, msg *Message) {
 			}
 		} else {
 			ackList.Store(keyFor(*msg.Self), *msg.Self)
+		}
+
+	case Switch: // Lowkey, not the best (because we don't use heartbeats or anything), but it'll work
+		// If protocol or suspect mode is different, switch and broadcast
+		oldProto := Protocol.Load()
+		oldMode := SuspectMode.Load()
+		Protocol.Store(msg.SwitchTo.Protocol)
+		SuspectMode.Store(msg.SwitchTo.SuspectMode)
+
+		if oldProto != msg.SwitchTo.Protocol || oldMode != msg.SwitchTo.SuspectMode {
+			go broadcastSwitch(conn)
+
+			if oldMode == "suspect" && msg.SwitchTo.SuspectMode == "nosuspect" {
+				// Promote suspected members to alive
+				membershipList.Range(func(k, v any) bool {
+					m := v.(Member)
+					if m.Status == Suspected {
+						m.Status = Alive
+						m.LastUpdated = tick
+						membershipList.Store(k.(string), m)
+					}
+					return true
+				})
+			}
+
+			// Restart goroutine even if mode changes
+			if msg.SwitchTo.Protocol == "gossip" {
+				go gossip(conn, TimeUnit)
+			} else {
+				go ping(conn, TimeUnit)
+			}
 		}
 	}
 }
@@ -520,11 +618,28 @@ func handleCommand(line string, conn *net.UDPConn) {
 			return
 		}
 
-		old := Protocol.Load()
+		oldProto := Protocol.Load()
+		oldMode := SuspectMode.Load()
 		Protocol.Store(proto)
 		SuspectMode.Store(mode)
 
-		if old != proto {
+		if oldProto != proto || oldMode != mode {
+			go broadcastSwitch(conn)
+
+			if oldMode == "suspect" && mode == "nosuspect" {
+				// Promote suspected members to alive
+				membershipList.Range(func(k, v any) bool {
+					m := v.(Member)
+					if m.Status == Suspected {
+						m.Status = Alive
+						m.LastUpdated = tick
+						membershipList.Store(k.(string), m)
+					}
+					return true
+				})
+			}
+
+			// Restart goroutine even if mode changes
 			if proto == "gossip" {
 				go gossip(conn, TimeUnit)
 			} else {
@@ -533,7 +648,7 @@ func handleCommand(line string, conn *net.UDPConn) {
 		}
 
 	case "display_protocol":
-		fmt.Println("display_protocol")
+		fmt.Printf("%s %s\n", Protocol.Load(), SuspectMode.Load())
 
 	case "display_suspects":
 		members := snapshotMembers(false)
@@ -549,6 +664,4 @@ func handleCommand(line string, conn *net.UDPConn) {
 	}
 }
 
-// TODO: switch {gossip|ping} {suspect|nosuspect} !!!
-// TODO: display_protocol - output {gossip|ping} {suspect|nosuspect}
 // TODO: variable message drop rate

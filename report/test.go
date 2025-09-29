@@ -65,7 +65,7 @@ const (
 	Tfail          = 5
 	Tcleanup       = 5
 	K              = 3
-	TimeUnit       = time.Second
+	TimeUnit       = time.Millisecond * 25
 )
 
 var SelfHost string
@@ -77,6 +77,23 @@ var membershipList sync.Map
 var ackList sync.Map
 var selfId string
 var tick int
+
+var counter int64 = 0 // atomic int64
+
+func monitorCounterPerSecondFrom10s() {
+	ticker := time.NewTicker(10 * time.Second)
+	defer ticker.Stop()
+
+	var prev int64 = 0
+
+	for range ticker.C {
+		curr := atomic.LoadInt64(&counter) // current total
+		delta := curr - prev               // new counts in last 10 seconds
+		prev = curr
+		ratePerSecond := float64(delta) / 10.0
+		fmt.Printf("[Monitor] Counter per second (averaged over 10s): %.2f\n", ratePerSecond)
+	}
+}
 
 func keyFor(m Member) string { return fmt.Sprintf("%s:%d:%s", m.IP, m.Port, m.Timestamp) }
 
@@ -241,14 +258,17 @@ func gossip(conn *net.UDPConn, interval time.Duration) {
 					m.LastUpdated = tick
 					membershipList.Store(k.(string), m)
 					fmt.Printf("[SUSPECT - timeout] %s marked suspected at tick %d\n", k.(string), tick)
+					atomic.AddInt64(&counter, 1)
 				} else if m.Status == Suspected && elapsed >= Tfail {
 					m.Status = Failed
 					m.LastUpdated = tick
 					membershipList.Store(k.(string), m)
 					fmt.Printf("[FAIL] %s marked failed at tick %d\n", k.(string), tick)
+					atomic.AddInt64(&counter, 1)
 				} else if m.Status == Failed && elapsed >= Tcleanup {
 					membershipList.Delete(k.(string))
 					fmt.Printf("[DELETE] %s removed from membership list at tick %d\n", k.(string), tick)
+					atomic.AddInt64(&counter, 1)
 				}
 			} else {
 				if m.Status == Alive && elapsed >= Tfail {
@@ -256,9 +276,11 @@ func gossip(conn *net.UDPConn, interval time.Duration) {
 					m.LastUpdated = tick
 					membershipList.Store(k.(string), m)
 					fmt.Printf("[FAIL] %s marked failed at tick %d\n", k.(string), tick)
+					atomic.AddInt64(&counter, 1)
 				} else if m.Status == Failed && elapsed >= Tcleanup {
 					membershipList.Delete(k.(string))
 					fmt.Printf("[DELETE] %s removed from membership list at tick %d\n", k.(string), tick)
+					atomic.AddInt64(&counter, 1)
 				}
 			}
 			return true
@@ -381,6 +403,7 @@ func ping(conn *net.UDPConn, interval time.Duration) {
 					target.LastUpdated = tick
 					membershipList.Store(keyFor(target), target)
 					fmt.Printf("[SUSPECT - ack timeout] %s marked suspected at tick %d\n", keyFor(target), tick)
+					atomic.AddInt64(&counter, 1)
 				}
 			}
 
@@ -414,6 +437,7 @@ func ping(conn *net.UDPConn, interval time.Duration) {
 				if !acked {
 					membershipList.Delete(keyFor(target))
 					fmt.Printf("[DELETE] %s removed from membership list at tick %d\n", keyFor(target), tick)
+					atomic.AddInt64(&counter, 1)
 				}
 			}
 		}
@@ -423,7 +447,9 @@ func ping(conn *net.UDPConn, interval time.Duration) {
 func handleMessage(conn *net.UDPConn, msg *Message) {
 	// Simulate message drop
 	if rand.Float64() < FailureRate {
-		// return
+		if msg.MessageType != JoinReq && msg.MessageType != JoinReply {
+			return
+		}
 	}
 
 	log.Printf("recv %s from %s", msg.MessageType, keyFor(*msg.Self))
@@ -622,6 +648,8 @@ func main() {
 	} else {
 		go ping(conn, TimeUnit)
 	}
+
+	go monitorCounterPerSecondFrom10s()
 
 	scanner := bufio.NewScanner(os.Stdin)
 	for scanner.Scan() {

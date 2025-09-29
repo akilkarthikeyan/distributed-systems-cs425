@@ -26,14 +26,26 @@ Each VM maintains a membership list, detects failures, and communicates with oth
 
 ---
 
-## Setup
+## Running
 
-Run these steps on each VM:
+Run these steps on each VM (make sure introducer i.e VM1 is run first):
 
 ```bash
 # 1. Clone this repo
-git clone https://gitlab.engr.illinois.edu/your-repo.git mp1
-cd mp1
+git clone https://gitlab.engr.illinois.edu/akshatg4.git mp2
+cd mp2
 
-# 2. Build the binary
-go build -o membership main.go
+# 2. Run the code as
+go run . {failure_rate} {ping|gossip} {suspect|nosuspect}
+
+# 3. CMD options
+list_mem
+list_self
+switch {ping|gossip} {suspect|nosuspect}
+display_protocol
+display_suspects
+```
+
+
+
+

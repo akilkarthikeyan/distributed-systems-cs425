@@ -32,8 +32,8 @@ Run these steps on each VM (make sure introducer i.e VM1 is run first):
 
 ```bash
 # 1. Clone this repo
-git clone https://gitlab.engr.illinois.edu/akshatg4.git mp2
-cd mp2
+git clone https://gitlab.engr.illinois.edu/akshatg4/g95.git g95
+cd g95/mp2
 
 # 2. Run the code as
 go run . {failure_rate} {ping|gossip} {suspect|nosuspect}

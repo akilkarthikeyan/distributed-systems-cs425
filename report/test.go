@@ -258,13 +258,13 @@ func gossip(conn *net.UDPConn, interval time.Duration) {
 					m.LastUpdated = tick
 					membershipList.Store(k.(string), m)
 					fmt.Printf("[SUSPECT - timeout] %s marked suspected at tick %d\n", k.(string), tick)
-					atomic.AddInt64(&counter, 1)
+					// atomic.AddInt64(&counter, 1)
 				} else if m.Status == Suspected && elapsed >= Tfail {
 					m.Status = Failed
 					m.LastUpdated = tick
 					membershipList.Store(k.(string), m)
 					fmt.Printf("[FAIL] %s marked failed at tick %d\n", k.(string), tick)
-					atomic.AddInt64(&counter, 1)
+					// atomic.AddInt64(&counter, 1)
 				} else if m.Status == Failed && elapsed >= Tcleanup {
 					membershipList.Delete(k.(string))
 					fmt.Printf("[DELETE] %s removed from membership list at tick %d\n", k.(string), tick)
@@ -276,7 +276,7 @@ func gossip(conn *net.UDPConn, interval time.Duration) {
 					m.LastUpdated = tick
 					membershipList.Store(k.(string), m)
 					fmt.Printf("[FAIL] %s marked failed at tick %d\n", k.(string), tick)
-					atomic.AddInt64(&counter, 1)
+					// atomic.AddInt64(&counter, 1)
 				} else if m.Status == Failed && elapsed >= Tcleanup {
 					membershipList.Delete(k.(string))
 					fmt.Printf("[DELETE] %s removed from membership list at tick %d\n", k.(string), tick)
@@ -403,7 +403,7 @@ func ping(conn *net.UDPConn, interval time.Duration) {
 					target.LastUpdated = tick
 					membershipList.Store(keyFor(target), target)
 					fmt.Printf("[SUSPECT - ack timeout] %s marked suspected at tick %d\n", keyFor(target), tick)
-					atomic.AddInt64(&counter, 1)
+					// atomic.AddInt64(&counter, 1)
 				}
 			}
 

@@ -447,7 +447,7 @@ func ping(conn *net.UDPConn, interval time.Duration) {
 func handleMessage(conn *net.UDPConn, msg *Message) {
 	// Simulate message drop
 	if rand.Float64() < FailureRate {
-		if msg.MessageType != JoinReq && msg.MessageType != JoinReply {
+		if msg.MessageType != JoinReq && msg.MessageType != JoinReply && msg.MessageType != Ping {
 			return
 		}
 	}

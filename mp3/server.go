@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"math/rand/v2"
 	"net"
 	"os"
 	"strings"
@@ -12,12 +13,87 @@ import (
 	"time"
 )
 
+type Status string
+
+const (
+	Alive  Status = "alive"
+	Failed Status = "failed"
+)
+
+type MessageType string
+
+const (
+	Gossip    MessageType = "gossip"
+	JoinReq   MessageType = "join-req"
+	JoinReply MessageType = "join-reply"
+)
+
+type Member struct {
+	IP          string `json:"ip"`
+	Port        int    `json:"port"`
+	Timestamp   string `json:"timestamp"`
+	Heartbeat   int    `json:"heartbeat"`
+	LastUpdated int    `json:"lastUpdated"`
+	Status      Status `json:"status"`
+}
+
+type Message struct {
+	MessageType MessageType     `json:"messageType"`
+	From        *Member         `json:"self,omitempty"`
+	Payload     json.RawMessage `json:"payload,omitempty"`
+}
+
+type GossipPayload struct {
+	Members map[string]Member `json:"Members"`
+}
+
+const (
+	SelfPort       = 1234
+	IntroducerHost = "fa25-cs425-9501.cs.illinois.edu"
+	IntroducerPort = 1234
+	Tfail          = 5
+	Tcleanup       = 5
+	K              = 3
+	TimeUnit       = time.Second * 5
+)
+
 var tick int
 var membershipList sync.Map
 
-// Init these
 var selfHost string
 var selfId string
+
+func keyFor(m Member) string { return fmt.Sprintf("%s:%d:%s", m.IP, m.Port, m.Timestamp) }
+
+func snapshotMembers(omitFailed bool) map[string]Member {
+	out := make(map[string]Member)
+	membershipList.Range(func(k, v any) bool {
+		if omitFailed && v.(Member).Status == Failed {
+			return true
+		}
+		out[k.(string)] = v.(Member)
+		return true
+	})
+	return out
+}
+
+func selectKMembers(members map[string]Member, k int) []Member {
+	slice := make([]Member, 0, len(members))
+	for _, m := range members {
+		slice = append(slice, m)
+	}
+
+	// Fewer than k members
+	if len(slice) <= k {
+		return slice
+	}
+
+	rand.Shuffle(len(slice), func(i, j int) {
+		slice[i], slice[j] = slice[j], slice[i]
+	})
+
+	return slice[:k]
+}
 
 func sendUDP(conn *net.UDPConn, addr *net.UDPAddr, msg *Message) {
 	data, err := json.Marshal(msg)
@@ -107,9 +183,9 @@ func gossip(conn *net.UDPConn, interval time.Duration) {
 		})
 
 		// Select K random members to gossip to (exlude self)
-		members := SnapshotMembers(true)
+		members := snapshotMembers(true)
 		delete(members, selfId)
-		targets := SelectKMembers(members, K)
+		targets := selectKMembers(members, K)
 		members[selfId] = self // add self back
 
 		// Gossip
@@ -126,13 +202,13 @@ func gossip(conn *net.UDPConn, interval time.Duration) {
 				Payload:     payloadBytes,
 			}
 			sendUDP(conn, targetAddr, &msg)
-			log.Printf("sent %s to %s", msg.MessageType, KeyFor(target))
+			log.Printf("sent %s to %s", msg.MessageType, keyFor(target))
 		}
 	}
 }
 
 func handleMessage(conn *net.UDPConn, msg *Message) {
-	log.Printf("recv %s from %s", msg.MessageType, KeyFor(*msg.From))
+	log.Printf("recv %s from %s", msg.MessageType, keyFor(*msg.From))
 
 	switch msg.MessageType {
 	case Gossip:
@@ -145,7 +221,7 @@ func handleMessage(conn *net.UDPConn, msg *Message) {
 
 	case JoinReq:
 		// Send JoinReply with current membership list
-		members := SnapshotMembers(true)
+		members := snapshotMembers(true)
 		v, _ := membershipList.Load(selfId)
 		self := v.(Member)
 
@@ -161,7 +237,7 @@ func handleMessage(conn *net.UDPConn, msg *Message) {
 			return
 		}
 		sendUDP(conn, senderAddr, &reply)
-		log.Printf("sent %s to %s", reply.MessageType, KeyFor(*msg.From))
+		log.Printf("sent %s to %s", reply.MessageType, keyFor(*msg.From))
 
 	case JoinReply:
 		var gp GossipPayload
@@ -207,7 +283,7 @@ func main() {
 		Heartbeat: 0,
 		Status:    Alive,
 	}
-	selfId = KeyFor(self)
+	selfId = keyFor(self)
 	membershipList.Store(selfId, self)
 
 	// Listen for messages
@@ -247,7 +323,7 @@ func handleCommand(line string, conn *net.UDPConn) {
 
 	switch fields[0] {
 	case "list_mem":
-		members := SnapshotMembers(false)
+		members := snapshotMembers(false)
 		fmt.Printf("Membership List:\n")
 		for id, m := range members {
 			fmt.Printf("%s - Status: %s, Heartbeat: %d, LastUpdated: %d\n", id, m.Status, m.Heartbeat, m.LastUpdated)

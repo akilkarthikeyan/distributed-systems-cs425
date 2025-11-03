@@ -1,11 +1,13 @@
 package main
 
 import (
+	"bufio"
 	"encoding/json"
 	"fmt"
 	"log"
 	"net"
 	"os"
+	"strings"
 	"sync"
 	"time"
 )
@@ -218,4 +220,35 @@ func main() {
 	}
 
 	go gossip(conn, TimeUnit)
+
+	scanner := bufio.NewScanner(os.Stdin)
+	for scanner.Scan() {
+		line := scanner.Text()
+		handleCommand(line, conn)
+	}
+	if err := scanner.Err(); err != nil {
+		fmt.Printf("stdin error: %v\n", err)
+	}
+}
+
+func handleCommand(line string, conn *net.UDPConn) {
+	fields := strings.Fields(line)
+	if len(fields) == 0 {
+		return
+	}
+
+	switch fields[0] {
+	case "list_mem":
+		members := SnapshotMembers(false)
+		fmt.Printf("Membership List:\n")
+		for id, m := range members {
+			fmt.Printf("%s - Status: %s, Heartbeat: %d, LastUpdated: %d\n", id, m.Status, m.Heartbeat, m.LastUpdated)
+		}
+
+	case "list_self":
+		fmt.Println(selfId)
+
+	default:
+		fmt.Println("Unknown command:", line)
+	}
 }

@@ -119,12 +119,11 @@ func gossip(conn *net.UDPConn, interval time.Duration) {
 				log.Printf("resolve target: %v", err)
 				continue
 			}
+			payloadBytes, _ := json.Marshal(GossipPayload{Members: members})
 			msg := Message{
 				MessageType: Gossip,
 				From:        &self,
-				Payload: map[string]any{
-					"Members": members,
-				},
+				Payload:     payloadBytes,
 			}
 			sendUDP(conn, targetAddr, &msg)
 			log.Printf("sent %s to %s", msg.MessageType, KeyFor(target))
@@ -137,7 +136,12 @@ func handleMessage(conn *net.UDPConn, msg *Message) {
 
 	switch msg.MessageType {
 	case Gossip:
-		mergeMembershipList(msg.Payload["Members"].(map[string]Member))
+		var gp GossipPayload
+		if err := json.Unmarshal(msg.Payload, &gp); err != nil {
+			log.Printf("gossip payload unmarshal: %v", err)
+			return
+		}
+		mergeMembershipList(gp.Members)
 
 	case JoinReq:
 		// Send JoinReply with current membership list
@@ -145,12 +149,11 @@ func handleMessage(conn *net.UDPConn, msg *Message) {
 		v, _ := membershipList.Load(selfId)
 		self := v.(Member)
 
+		payloadBytes, _ := json.Marshal(GossipPayload{Members: members})
 		reply := Message{
 			MessageType: JoinReply,
 			From:        &self,
-			Payload: map[string]any{
-				"Members": members,
-			},
+			Payload:     payloadBytes,
 		}
 		senderAddr, err := net.ResolveUDPAddr("udp", fmt.Sprintf("%s:%d", msg.From.IP, msg.From.Port))
 		if err != nil {
@@ -161,7 +164,12 @@ func handleMessage(conn *net.UDPConn, msg *Message) {
 		log.Printf("sent %s to %s", reply.MessageType, KeyFor(*msg.From))
 
 	case JoinReply:
-		mergeMembershipList(msg.Payload["Members"].(map[string]Member))
+		var gp GossipPayload
+		if err := json.Unmarshal(msg.Payload, &gp); err != nil {
+			log.Printf("gossip payload unmarshal: %v", err)
+			return
+		}
+		mergeMembershipList(gp.Members)
 	}
 }
 

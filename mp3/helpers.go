@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"math/rand/v2"
 	"time"
@@ -31,9 +32,13 @@ type Member struct {
 }
 
 type Message struct {
-	MessageType MessageType    `json:"messageType"`
-	From        *Member        `json:"self,omitempty"`
-	Payload     map[string]any `json:"payload,omitempty"`
+	MessageType MessageType     `json:"messageType"`
+	From        *Member         `json:"self,omitempty"`
+	Payload     json.RawMessage `json:"payload,omitempty"`
+}
+
+type GossipPayload struct {
+	Members map[string]Member `json:"Members"`
 }
 
 const (

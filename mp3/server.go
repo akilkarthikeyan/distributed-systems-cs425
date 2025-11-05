@@ -3,58 +3,15 @@ package main
 import (
 	"bufio"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"log"
-	"math/rand/v2"
 	"net"
 	"os"
 	"strings"
 	"sync"
 	"time"
-)
-
-type Status string
-
-const (
-	Alive  Status = "alive"
-	Failed Status = "failed"
-)
-
-type MessageType string
-
-const (
-	Gossip    MessageType = "gossip"
-	JoinReq   MessageType = "join-req"
-	JoinReply MessageType = "join-reply"
-)
-
-type Member struct {
-	IP          string `json:"ip"`
-	Port        int    `json:"port"`
-	Timestamp   string `json:"timestamp"`
-	Heartbeat   int    `json:"heartbeat"`
-	LastUpdated int    `json:"lastUpdated"`
-	Status      Status `json:"status"`
-}
-
-type Message struct {
-	MessageType MessageType     `json:"messageType"`
-	From        *Member         `json:"self,omitempty"`
-	Payload     json.RawMessage `json:"payload,omitempty"`
-}
-
-type GossipPayload struct {
-	Members map[string]Member `json:"Members"`
-}
-
-const (
-	SelfPort       = 1234
-	IntroducerHost = "fa25-cs425-9501.cs.illinois.edu"
-	IntroducerPort = 1234
-	Tfail          = 5
-	Tcleanup       = 5
-	K              = 3
-	TimeUnit       = time.Second * 5
 )
 
 var tick int
@@ -63,63 +20,63 @@ var membershipList sync.Map
 var selfHost string
 var selfId string
 
-func keyFor(m Member) string { return fmt.Sprintf("%s:%d:%s", m.IP, m.Port, m.Timestamp) }
+var udpConn *net.UDPConn
 
-func snapshotMembers(omitFailed bool) map[string]Member {
-	out := make(map[string]Member)
-	membershipList.Range(func(k, v any) bool {
-		if omitFailed && v.(Member).Status == Failed {
-			return true
-		}
-		out[k.(string)] = v.(Member)
-		return true
-	})
-	return out
-}
-
-func selectKMembers(members map[string]Member, k int) []Member {
-	slice := make([]Member, 0, len(members))
-	for _, m := range members {
-		slice = append(slice, m)
-	}
-
-	// Fewer than k members
-	if len(slice) <= k {
-		return slice
-	}
-
-	rand.Shuffle(len(slice), func(i, j int) {
-		slice[i], slice[j] = slice[j], slice[i]
-	})
-
-	return slice[:k]
-}
-
-func sendUDP(conn *net.UDPConn, addr *net.UDPAddr, msg *Message) {
+func sendUDP(addr *net.UDPAddr, msg *Message) {
 	data, err := json.Marshal(msg)
 	if err != nil {
-		log.Printf("marshal: %v", err)
+		fmt.Printf("send udp marshal error: %v", err)
 		return
 	}
-	if _, err := conn.WriteToUDP(data, addr); err != nil {
-		log.Printf("write: %v", err)
+	if _, err := udpConn.WriteToUDP(data, addr); err != nil {
+		fmt.Printf("send udp write error: %v", err)
 	}
 }
 
-func listenUDP(conn *net.UDPConn) {
+func sendTCP(conn net.Conn, msg *Message) (*Message, error) {
+	enc := json.NewEncoder(conn)
+	dec := json.NewDecoder(conn)
+
+	// Send request
+	if err := enc.Encode(&msg); err != nil {
+		return nil, err
+	}
+
+	// Wait for response
+	var resp Message
+	if err := dec.Decode(&resp); err != nil {
+		return nil, err
+	}
+
+	return &resp, nil
+}
+
+func listenUDP() {
 	buf := make([]byte, 4096)
 	for {
-		n, raddr, err := conn.ReadFromUDP(buf)
+		n, raddr, err := udpConn.ReadFromUDP(buf)
 		if err != nil {
-			log.Printf("read: %v", err)
+			fmt.Printf("listen udp read error: %v", err)
 			continue
 		}
 		var msg Message
 		if err := json.Unmarshal(buf[:n], &msg); err != nil {
-			log.Printf("unmarshal from %v: %v", raddr, err)
+			fmt.Printf("listen udp unmarshal from %v error: %v", raddr, err)
 			continue
 		}
-		handleMessage(conn, &msg)
+		handleUDPMessage(&msg)
+	}
+}
+
+func listenTCP(ln net.Listener) {
+	for {
+		conn, err := ln.Accept()
+		if err != nil {
+			fmt.Printf("listen tcp accept error: %v", err)
+			continue
+		}
+		// Handle each client in a separate goroutine
+		go handleTCPMessage(conn)
 	}
 }
 
@@ -148,7 +105,7 @@ func mergeMembershipList(members map[string]Member) {
 	}
 }
 
-func gossip(conn *net.UDPConn, interval time.Duration) {
+func gossip(interval time.Duration) {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
@@ -183,16 +140,16 @@ func gossip(conn *net.UDPConn, interval time.Duration) {
 		})
 
 		// Select K random members to gossip to (exlude self)
-		members := snapshotMembers(true)
+		members := SnapshotMembers(true)
 		delete(members, selfId)
-		targets := selectKMembers(members, K)
+		targets := SelectKMembers(members, K)
 		members[selfId] = self // add self back
 
 		// Gossip
 		for _, target := range targets {
 			targetAddr, err := net.ResolveUDPAddr("udp", fmt.Sprintf("%s:%d", target.IP, target.Port))
 			if err != nil {
-				log.Printf("resolve target: %v", err)
+				fmt.Printf("gossip resolve target error: %v", err)
 				continue
 			}
 			payloadBytes, _ := json.Marshal(GossipPayload{Members: members})
@@ -201,27 +158,27 @@ func gossip(conn *net.UDPConn, interval time.Duration) {
 				From:        &self,
 				Payload:     payloadBytes,
 			}
-			sendUDP(conn, targetAddr, &msg)
-			log.Printf("sent %s to %s", msg.MessageType, keyFor(target))
+			sendUDP(targetAddr, &msg)
+			log.Printf("sent %s to %s", msg.MessageType, KeyFor(target))
 		}
 	}
 }
 
-func handleMessage(conn *net.UDPConn, msg *Message) {
-	log.Printf("recv %s from %s", msg.MessageType, keyFor(*msg.From))
+func handleUDPMessage(msg *Message) {
+	log.Printf("recv %s from %s", msg.MessageType, KeyFor(*msg.From))
 
 	switch msg.MessageType {
 	case Gossip:
 		var gp GossipPayload
 		if err := json.Unmarshal(msg.Payload, &gp); err != nil {
-			log.Printf("gossip payload unmarshal: %v", err)
+			fmt.Printf("gossip payload unmarshal error: %v", err)
 			return
 		}
 		mergeMembershipList(gp.Members)
 
 	case JoinReq:
 		// Send JoinReply with current membership list
-		members := snapshotMembers(true)
+		members := SnapshotMembers(true)
 		v, _ := membershipList.Load(selfId)
 		self := v.(Member)
 
@@ -233,26 +190,63 @@ func handleMessage(conn *net.UDPConn, msg *Message) {
 		}
 		senderAddr, err := net.ResolveUDPAddr("udp", fmt.Sprintf("%s:%d", msg.From.IP, msg.From.Port))
 		if err != nil {
-			log.Printf("resolve sender: %v", err)
+			fmt.Printf("handle udp resolve sender error: %v", err)
 			return
 		}
-		sendUDP(conn, senderAddr, &reply)
-		log.Printf("sent %s to %s", reply.MessageType, keyFor(*msg.From))
+		sendUDP(senderAddr, &reply)
+		log.Printf("sent %s to %s", reply.MessageType, KeyFor(*msg.From))
 
 	case JoinReply:
 		var gp GossipPayload
 		if err := json.Unmarshal(msg.Payload, &gp); err != nil {
-			log.Printf("gossip payload unmarshal: %v", err)
+			fmt.Printf("handle udp gossip payload unmarshal error: %v", err)
 			return
 		}
 		mergeMembershipList(gp.Members)
 	}
 }
 
+func handleTCPMessage(conn net.Conn) {
+	defer conn.Close()
+	decoder := json.NewDecoder(conn)
+	encoder := json.NewEncoder(conn)
+
+	for {
+		var msg Message
+		if err := decoder.Decode(&msg); err != nil {
+			if errors.Is(err, io.EOF) {
+				// Connection closed by client, so return
+			} else {
+				fmt.Printf("handle tcp decode from %v error: %v\n", conn.RemoteAddr(), err)
+			}
+			return
+		}
+
+		log.Printf("recv %s from %s", msg.MessageType, conn.RemoteAddr())
+
+		switch msg.MessageType {
+		default:
+			var dummy string
+			if err := json.Unmarshal(msg.Payload, &dummy); err != nil {
+				fmt.Printf("Shit: %v\n", err)
+			}
+			fmt.Printf("Contents: %v\n", dummy)
+
+			resp := Message{
+				MessageType: "ack",
+				Payload:     json.RawMessage(`"Got your message!"`),
+			}
+			if err := encoder.Encode(&resp); err != nil {
+				fmt.Printf("Shit: %v\n", err)
+			}
+		}
+	}
+}
+
 func main() {
 	f, err := os.OpenFile("machine.log", os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
 	if err != nil {
-		log.Fatalf("error opening log file: %v", err)
+		fmt.Printf("log file open error: %v", err)
 	}
 	defer f.Close()
 	log.SetOutput(f)
@@ -260,20 +254,9 @@ func main() {
 	// Get self hostname
 	hostname, err := os.Hostname()
 	if err != nil {
-		log.Fatalf("get hostname: %v", err)
+		fmt.Printf("get hostname error: %v", err)
 	}
 	selfHost = hostname
-
-	// Bind locally on all interfaces: SelfPort
-	listenAddr, err := net.ResolveUDPAddr("udp", fmt.Sprintf(":%d", SelfPort))
-	if err != nil {
-		log.Fatalf("resolve listen: %v", err)
-	}
-	conn, err := net.ListenUDP("udp", listenAddr)
-	if err != nil {
-		log.Fatalf("listen: %v", err)
-	}
-	defer conn.Close()
 
 	// Add self to membership list
 	self := Member{
@@ -283,39 +266,57 @@ func main() {
 		Heartbeat: 0,
 		Status:    Alive,
 	}
-	selfId = keyFor(self)
+	selfId = KeyFor(self)
 	membershipList.Store(selfId, self)
 
-	// Listen for messages
-	go listenUDP(conn)
+	// Listen for UDP messages
+	listenAddr, err := net.ResolveUDPAddr("udp", fmt.Sprintf(":%d", SelfPort))
+	if err != nil {
+		fmt.Printf("resolve listenAddr error: %v", err)
+	}
+	udpConn, err = net.ListenUDP("udp", listenAddr)
+	if err != nil {
+		fmt.Printf("udp error: %v", err)
+	}
+	defer udpConn.Close()
+
+	go listenUDP()
+
+	// Listen for TCP messages
+	tcpLn, err := net.Listen("tcp", fmt.Sprintf(":%d", SelfPort))
+	if err != nil {
+		fmt.Printf("tcp error: %v", err)
+	}
+
+	go listenTCP(tcpLn)
 
 	// Send join to introducer iff we are not the introducer
 	if !(selfHost == IntroducerHost && SelfPort == IntroducerPort) {
 		introducerAddr, err := net.ResolveUDPAddr("udp", fmt.Sprintf("%s:%d", IntroducerHost, IntroducerPort))
 		if err != nil {
-			log.Fatalf("resolve introducer: %v", err)
+			fmt.Printf("resolve introducerAddr error: %v", err)
 		}
 		initial := Message{
 			MessageType: JoinReq,
 			From:        &self,
 		}
-		sendUDP(conn, introducerAddr, &initial)
-		log.Printf("sent %s to %s:%d", initial.MessageType, IntroducerHost, IntroducerPort)
+		sendUDP(introducerAddr, &initial)
+		// log.Printf("sent %s to %s:%d", initial.MessageType, IntroducerHost, IntroducerPort)
 	}
 
-	go gossip(conn, TimeUnit)
+	go gossip(TimeUnit)
 
 	scanner := bufio.NewScanner(os.Stdin)
 	for scanner.Scan() {
 		line := scanner.Text()
-		handleCommand(line, conn)
+		handleCommand(line)
 	}
 	if err := scanner.Err(); err != nil {
 		fmt.Printf("stdin error: %v\n", err)
 	}
 }
 
-func handleCommand(line string, conn *net.UDPConn) {
+func handleCommand(line string) {
 	fields := strings.Fields(line)
 	if len(fields) == 0 {
 		return
@@ -323,7 +324,7 @@ func handleCommand(line string, conn *net.UDPConn) {
 
 	switch fields[0] {
 	case "list_mem":
-		members := snapshotMembers(false)
+		members := SnapshotMembers(false)
 		fmt.Printf("Membership List:\n")
 		for id, m := range members {
 			fmt.Printf("%s - Status: %s, Heartbeat: %d, LastUpdated: %d\n", id, m.Status, m.Heartbeat, m.LastUpdated)

@@ -2,10 +2,19 @@ package main
 
 import (
 	"crypto/sha1"
+	"encoding/base64"
 	"encoding/binary"
 	"fmt"
 	"math/rand/v2"
+	"os"
+	"strings"
+
+	"github.com/google/uuid"
 )
+
+func GetUUID() string {
+	return strings.ReplaceAll(uuid.New().String(), "-", "")
+}
 
 func KeyFor(m Member) string { return fmt.Sprintf("%s:%d:%s", m.IP, m.Port, m.Timestamp) }
 
@@ -42,4 +51,12 @@ func SelectKMembers(members map[string]Member, k int) []Member {
 	})
 
 	return slice[:k]
+}
+
+func EncodeFileToBase64(path string) (string, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", err
+	}
+	return base64.StdEncoding.EncodeToString(data), nil
 }

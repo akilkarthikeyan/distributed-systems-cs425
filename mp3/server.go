@@ -33,8 +33,13 @@ func sendUDP(addr *net.UDPAddr, msg *Message) {
 	}
 }
 
-func sendTCP(conn net.Conn, msg *Message) (*Message, error) {
+func sendTCP(addr string, msg *Message) (*Message, error) {
+	conn, err := net.Dial("tcp", addr)
+	if err != nil {
+		return nil, err
+	}
 	defer conn.Close()
+
 	decoder := json.NewDecoder(conn)
 	encoder := json.NewEncoder(conn)
 
@@ -210,6 +215,9 @@ func handleMessage(msg *Message, encoder *json.Encoder) { // encoder can only be
 
 	// DELETE
 	case TCPTest:
+		v, _ := membershipList.Load(selfId)
+		self := v.(Member)
+
 		var temp string
 		if err := json.Unmarshal(msg.Payload, &temp); err != nil {
 			fmt.Printf("Shit: %v", err)
@@ -217,7 +225,11 @@ func handleMessage(msg *Message, encoder *json.Encoder) { // encoder can only be
 		}
 		fmt.Printf("Contents: %v\n", temp)
 
-		reply := "Gotcha"
+		reply := Message{
+			MessageType: TCPTest,
+			From:        &self,
+			Payload:     json.RawMessage(`"Hello back from server!"`),
+		}
 		if err := encoder.Encode(&reply); err != nil {
 			fmt.Printf("Shit 2: %v", err)
 		}
@@ -262,7 +274,7 @@ func main() {
 	self := Member{
 		IP:        selfHost,
 		Port:      SelfPort,
-		Timestamp: time.Now().Format(time.RFC3339Nano),
+		Timestamp: GetUUID(), // unique
 		Heartbeat: 0,
 		Status:    Alive,
 	}
@@ -332,6 +344,11 @@ func handleCommand(line string) {
 
 	case "list_self":
 		fmt.Println(selfId)
+
+	case "create":
+		if len(fields) != 3 {
+			fmt.Println("Usage: create <localfilename> <HyDFSfilename>")
+		}
 
 	default:
 		fmt.Println("Unknown command:", line)

@@ -41,6 +41,12 @@ type GossipPayload struct {
 	Members map[string]Member `json:"Members"`
 }
 
+type FilePayload struct {
+	Filename string `json:"filename"`
+	DataB64  string `json:"dataB64"`
+	ID       string `json:"id"` // chunk ID
+}
+
 const (
 	SelfPort       = 1234
 	IntroducerHost = "fa25-cs425-9501.cs.illinois.edu"
@@ -51,9 +57,9 @@ const (
 	TimeUnit       = time.Second * 5
 )
 
-type HyDFSFile struct {
-	Filename     string
-	FileRingId   uint64
-	Chunks       []string
-	ChunkFileMap map[string]string
-}
+// type HyDFSFile struct {
+// 	Filename     string
+// 	FileRingId   uint64
+// 	Chunks       []string
+// 	ChunkFileMap map[string]string
+// }

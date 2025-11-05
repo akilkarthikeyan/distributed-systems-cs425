@@ -34,17 +34,18 @@ func sendUDP(addr *net.UDPAddr, msg *Message) {
 }
 
 func sendTCP(conn net.Conn, msg *Message) (*Message, error) {
-	enc := json.NewEncoder(conn)
-	dec := json.NewDecoder(conn)
+	defer conn.Close()
+	decoder := json.NewDecoder(conn)
+	encoder := json.NewEncoder(conn)
 
 	// Send request
-	if err := enc.Encode(&msg); err != nil {
+	if err := encoder.Encode(msg); err != nil {
 		return nil, err
 	}
 
 	// Wait for response
 	var resp Message
-	if err := dec.Decode(&resp); err != nil {
+	if err := decoder.Decode(&resp); err != nil {
 		return nil, err
 	}
 
@@ -64,7 +65,7 @@ func listenUDP() {
 			fmt.Printf("listen udp unmarshal from %v error: %v", raddr, err)
 			continue
 		}
-		handleUDPMessage(&msg)
+		handleMessage(&msg, nil)
 	}
 }
 
@@ -76,7 +77,7 @@ func listenTCP(ln net.Listener) {
 			continue
 		}
 		// Handle each client in a separate goroutine
-		go handleTCPMessage(conn)
+		go handleTCPClient(conn)
 	}
 }
 
@@ -164,10 +165,11 @@ func gossip(interval time.Duration) {
 	}
 }
 
-func handleUDPMessage(msg *Message) {
+func handleMessage(msg *Message, encoder *json.Encoder) { // encoder can only be present for TCP messages
 	log.Printf("recv %s from %s", msg.MessageType, KeyFor(*msg.From))
 
 	switch msg.MessageType {
+	// UDP message
 	case Gossip:
 		var gp GossipPayload
 		if err := json.Unmarshal(msg.Payload, &gp); err != nil {
@@ -176,6 +178,7 @@ func handleUDPMessage(msg *Message) {
 		}
 		mergeMembershipList(gp.Members)
 
+	// UDP message
 	case JoinReq:
 		// Send JoinReply with current membership list
 		members := SnapshotMembers(true)
@@ -196,6 +199,7 @@ func handleUDPMessage(msg *Message) {
 		sendUDP(senderAddr, &reply)
 		log.Printf("sent %s to %s", reply.MessageType, KeyFor(*msg.From))
 
+	// UDP message
 	case JoinReply:
 		var gp GossipPayload
 		if err := json.Unmarshal(msg.Payload, &gp); err != nil {
@@ -203,10 +207,24 @@ func handleUDPMessage(msg *Message) {
 			return
 		}
 		mergeMembershipList(gp.Members)
+
+	// DELETE
+	case TCPTest:
+		var temp string
+		if err := json.Unmarshal(msg.Payload, &temp); err != nil {
+			fmt.Printf("Shit: %v", err)
+			return
+		}
+		fmt.Printf("Contents: %v\n", temp)
+
+		reply := "Gotcha"
+		if err := encoder.Encode(&reply); err != nil {
+			fmt.Printf("Shit 2: %v", err)
+		}
 	}
 }
 
-func handleTCPMessage(conn net.Conn) {
+func handleTCPClient(conn net.Conn) {
 	defer conn.Close()
 	decoder := json.NewDecoder(conn)
 	encoder := json.NewEncoder(conn)
@@ -221,25 +239,7 @@ func handleTCPMessage(conn net.Conn) {
 			}
 			return
 		}
-
-		log.Printf("recv %s from %s", msg.MessageType, conn.RemoteAddr())
-
-		switch msg.MessageType {
-		default:
-			var dummy string
-			if err := json.Unmarshal(msg.Payload, &dummy); err != nil {
-				fmt.Printf("Shit: %v\n", err)
-			}
-			fmt.Printf("Contents: %v\n", dummy)
-
-			resp := Message{
-				MessageType: "ack",
-				Payload:     json.RawMessage(`"Got your message!"`),
-			}
-			if err := encoder.Encode(&resp); err != nil {
-				fmt.Printf("Shit: %v\n", err)
-			}
-		}
+		handleMessage(&msg, encoder)
 	}
 }
 

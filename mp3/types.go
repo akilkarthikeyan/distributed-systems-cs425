@@ -18,6 +18,7 @@ const (
 	Gossip    MessageType = "gossip"
 	JoinReq   MessageType = "join-req"
 	JoinReply MessageType = "join-reply"
+	TCPTest   MessageType = "tcp-test" // DELETE
 )
 
 type Member struct {

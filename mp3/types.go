@@ -71,3 +71,61 @@ type HyDFSFile struct {
 	HyDFSCompliantFilename string        // without slashes
 	Chunks                 []FilePayload // will contain DataB64 only during transport
 }
+
+// ID is a 160-bit SHA-1 digest (20 bytes). Used for consistent file hashing and ring placement.
+type ID [20]byte
+
+type Ring struct {
+	IDs   []ID     // ring tokens = SHA1("IP:port") in ascending order
+	Keys  []string // membership keys, e.g., "IP:port:timestamp" (useful for logs)
+	Nodes []Member // full Member records (IP, Port, Timestamp, Status, etc.)
+}
+
+// ChunkID represents a chunk identifier with client and global sequencing.
+// Useful for implementing per-client ordering and global ordering.
+type ChunkID struct {
+	ClientID  string // Who appended
+	ClientSeq uint64 // Client's per-file counter (0,1,2,...)
+	GlobalSeq uint64 // Primary-assigned, file-wide (1,2,3,...)
+	Checksum  uint64 // xxhash64 over bytes (for integrity)
+}
+
+// ChunkMeta contains metadata about a stored chunk.
+type ChunkMeta struct {
+	ID   ChunkID
+	Size int64  // Bytes
+	Path string // Local path: data/chunks/<fileID>/<chunkID>.data
+}
+
+// FileManifest represents comprehensive metadata for a file.
+// Useful for advanced features like version vectors and anti-entropy.
+type FileManifest struct {
+	FileID          string      // SHA1(filename)
+	Filename        string      // Human-readable name
+	ManifestVersion uint64      // Bump on each write/merge
+	PrimaryReplica  string      // Node token of current primary
+	Replicas        []string    // N owner tokens (for debugging)
+	Chunks          []ChunkMeta // Ordered by GlobalSeq
+	// Per-client tracking
+	HighestSeq map[string]uint64 // clientID -> last acked ClientSeq
+	// Anti-entropy tracking
+	VersionVector map[string]map[string]uint64 // replica -> clientID -> last seq
+}
+
+// AppendRequest represents a request to append data to a file.
+// Useful for implementing more sophisticated append operations.
+type AppendRequest struct {
+	Filename  string
+	ClientID  string
+	ClientSeq uint64
+	Data      []byte
+}
+
+// AppendAck represents an acknowledgment of an append operation.
+type AppendAck struct {
+	Filename  string
+	ClientID  string
+	ClientSeq uint64
+	GlobalSeq uint64
+	Success   bool
+}

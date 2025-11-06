@@ -15,10 +15,10 @@ const (
 type MessageType string
 
 const (
-	Gossip    MessageType = "gossip"
-	JoinReq   MessageType = "join-req"
-	JoinReply MessageType = "join-reply"
-	TCPTest   MessageType = "tcp-test" // DELETE
+	Gossip          MessageType = "gossip"
+	JoinReq         MessageType = "join-req"
+	JoinReply       MessageType = "join-reply"
+	CreateHyDFSFile MessageType = "create-hydfs-file"
 )
 
 type Member struct {
@@ -26,6 +26,7 @@ type Member struct {
 	IP          string `json:"ip"`
 	Port        int    `json:"port"`
 	Timestamp   string `json:"timestamp"`
+	RingID      uint64 `json:"ringId"`
 	Heartbeat   int    `json:"heartbeat"`
 	LastUpdated int    `json:"lastUpdated"`
 	Status      Status `json:"status"`

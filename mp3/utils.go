@@ -23,9 +23,30 @@ func GetRingId(s string) uint64 {
 	return binary.BigEndian.Uint64(sum[:8]) // take the first 8 bytes as a 64-bit number
 }
 
+func GetRingSuccessor(ringId uint64) Member {
+	var successor Member
+	minDiff := ^uint64(0) // max uint64
+
+	MembershipList.Range(func(_, v any) bool {
+		m := v.(Member)
+		if m.Status != Alive || m.RingID == ringId {
+			return true
+		}
+
+		diff := m.RingID - ringId // wraps automatically for uint64
+		if diff < minDiff {
+			minDiff = diff
+			successor = m
+		}
+		return true
+	})
+
+	return successor
+}
+
 func SnapshotMembers(omitFailed bool) map[string]Member {
 	out := make(map[string]Member)
-	membershipList.Range(func(k, v any) bool {
+	MembershipList.Range(func(k, v any) bool {
 		if omitFailed && v.(Member).Status == Failed {
 			return true
 		}
@@ -59,4 +80,12 @@ func EncodeFileToBase64(path string) (string, error) {
 		return "", err
 	}
 	return base64.StdEncoding.EncodeToString(data), nil
+}
+
+func DecodeBase64ToBytes(dataB64 string) ([]byte, error) {
+	data, err := base64.StdEncoding.DecodeString(dataB64)
+	if err != nil {
+		return nil, err
+	}
+	return data, nil
 }

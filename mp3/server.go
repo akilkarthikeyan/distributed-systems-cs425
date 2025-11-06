@@ -9,13 +9,14 @@ import (
 	"log"
 	"net"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
 )
 
-var tick int
-var membershipList sync.Map
+var Tick int
+var MembershipList sync.Map
 
 var selfHost string
 var selfId string
@@ -30,6 +31,23 @@ func sendUDP(addr *net.UDPAddr, msg *Message) {
 	}
 	if _, err := udpConn.WriteToUDP(data, addr); err != nil {
 		fmt.Printf("send udp write error: %v", err)
+	}
+}
+
+func listenUDP() {
+	buf := make([]byte, 4096)
+	for {
+		n, raddr, err := udpConn.ReadFromUDP(buf)
+		if err != nil {
+			fmt.Printf("listen udp read error: %v", err)
+			continue
+		}
+		var msg Message
+		if err := json.Unmarshal(buf[:n], &msg); err != nil {
+			fmt.Printf("listen udp unmarshal from %v error: %v", raddr, err)
+			continue
+		}
+		handleMessage(&msg, nil)
 	}
 }
 
@@ -57,23 +75,6 @@ func sendTCP(addr string, msg *Message) (*Message, error) {
 	return &resp, nil
 }
 
-func listenUDP() {
-	buf := make([]byte, 4096)
-	for {
-		n, raddr, err := udpConn.ReadFromUDP(buf)
-		if err != nil {
-			fmt.Printf("listen udp read error: %v", err)
-			continue
-		}
-		var msg Message
-		if err := json.Unmarshal(buf[:n], &msg); err != nil {
-			fmt.Printf("listen udp unmarshal from %v error: %v", raddr, err)
-			continue
-		}
-		handleMessage(&msg, nil)
-	}
-}
-
 func listenTCP(ln net.Listener) {
 	for {
 		conn, err := ln.Accept()
@@ -86,26 +87,46 @@ func listenTCP(ln net.Listener) {
 	}
 }
 
+func handleTCPClient(conn net.Conn) {
+	defer conn.Close()
+	decoder := json.NewDecoder(conn)
+	encoder := json.NewEncoder(conn)
+
+	for {
+		var msg Message
+		if err := decoder.Decode(&msg); err != nil {
+			if errors.Is(err, io.EOF) {
+				// Connection closed by client, so return
+			} else {
+				fmt.Printf("handle tcp decode from %v error: %v\n", conn.RemoteAddr(), err)
+			}
+			return
+		}
+		handleMessage(&msg, encoder)
+	}
+}
+
 func mergeMembershipList(members map[string]Member) {
 	for id, m := range members {
-		v, ok := membershipList.Load(id)
+		v, ok := MembershipList.Load(id)
 		if !ok { // New member
 			newMember := Member{
 				IP:          m.IP,
 				Port:        m.Port,
 				Timestamp:   m.Timestamp,
+				RingID:      m.RingID,
 				Heartbeat:   m.Heartbeat,
-				LastUpdated: tick,
+				LastUpdated: Tick,
 				Status:      m.Status,
 			}
-			membershipList.Store(id, newMember)
+			MembershipList.Store(id, newMember)
 		} else { // Existing member
 			existing := v.(Member)
 			if m.Heartbeat > existing.Heartbeat {
 				existing.Heartbeat = m.Heartbeat
 				existing.Status = m.Status
-				existing.LastUpdated = tick
-				membershipList.Store(id, existing)
+				existing.LastUpdated = Tick
+				MembershipList.Store(id, existing)
 			}
 		}
 	}
@@ -116,29 +137,29 @@ func gossip(interval time.Duration) {
 	defer ticker.Stop()
 
 	for range ticker.C {
-		tick++
+		Tick++
 
 		// Increment self heartbeat
-		v, _ := membershipList.Load(selfId)
+		v, _ := MembershipList.Load(selfId)
 		self := v.(Member)
 
 		self.Status = Alive
 		self.Heartbeat++
-		self.LastUpdated = tick
-		membershipList.Store(selfId, self)
+		self.LastUpdated = Tick
+		MembershipList.Store(selfId, self)
 
 		// Check for failed/suspected members
-		membershipList.Range(func(k, v any) bool {
+		MembershipList.Range(func(k, v any) bool {
 			m := v.(Member)
-			elapsed := tick - m.LastUpdated
+			elapsed := Tick - m.LastUpdated
 
 			if m.Status == Alive && elapsed >= Tfail {
 				m.Status = Failed
-				m.LastUpdated = tick
-				membershipList.Store(k.(string), m)
+				m.LastUpdated = Tick
+				MembershipList.Store(k.(string), m)
 				// fmt.Printf("[FAIL] %s marked failed at tick %d\n", k.(string), tick)
 			} else if m.Status == Failed && elapsed >= Tcleanup {
-				membershipList.Delete(k.(string))
+				MembershipList.Delete(k.(string))
 				// fmt.Printf("[DELETE] %s removed from membership list at tick %d\n", k.(string), tick)
 			}
 
@@ -187,7 +208,7 @@ func handleMessage(msg *Message, encoder *json.Encoder) { // encoder can only be
 	case JoinReq:
 		// Send JoinReply with current membership list
 		members := SnapshotMembers(true)
-		v, _ := membershipList.Load(selfId)
+		v, _ := MembershipList.Load(selfId)
 		self := v.(Member)
 
 		payloadBytes, _ := json.Marshal(GossipPayload{Members: members})
@@ -198,7 +219,7 @@ func handleMessage(msg *Message, encoder *json.Encoder) { // encoder can only be
 		}
 		senderAddr, err := net.ResolveUDPAddr("udp", fmt.Sprintf("%s:%d", msg.From.IP, msg.From.Port))
 		if err != nil {
-			fmt.Printf("handle udp resolve sender error: %v", err)
+			fmt.Printf("resolve sender error: %v", err)
 			return
 		}
 		sendUDP(senderAddr, &reply)
@@ -208,51 +229,65 @@ func handleMessage(msg *Message, encoder *json.Encoder) { // encoder can only be
 	case JoinReply:
 		var gp GossipPayload
 		if err := json.Unmarshal(msg.Payload, &gp); err != nil {
-			fmt.Printf("handle udp gossip payload unmarshal error: %v", err)
+			fmt.Printf("gossip payload unmarshal error: %v", err)
 			return
 		}
 		mergeMembershipList(gp.Members)
 
-	// DELETE
-	case TCPTest:
-		v, _ := membershipList.Load(selfId)
-		self := v.(Member)
-
-		var temp string
-		if err := json.Unmarshal(msg.Payload, &temp); err != nil {
-			fmt.Printf("Shit: %v", err)
+	// TCP message
+	case CreateHyDFSFile:
+		var fp FilePayload
+		if err := json.Unmarshal(msg.Payload, &fp); err != nil {
+			fmt.Printf("file payload unmarshal error: %v", err)
 			return
 		}
-		fmt.Printf("Contents: %v\n", temp)
 
-		reply := Message{
-			MessageType: TCPTest,
-			From:        &self,
-			Payload:     json.RawMessage(`"Hello back from server!"`),
+		data, err := DecodeBase64ToBytes(fp.DataB64)
+		if err != nil {
+			fmt.Printf("file decode error: %v", err)
+			return
 		}
-		if err := encoder.Encode(&reply); err != nil {
-			fmt.Printf("Shit 2: %v", err)
+
+		if err := os.MkdirAll("hydfs", 0755); err != nil {
+			fmt.Printf("failed to create hydfs dir: %v\n", err)
+			return
 		}
+
+		targetPath := filepath.Join("hydfs", fp.Filename)
+		if err := os.WriteFile(targetPath, data, 0644); err != nil {
+			fmt.Printf("failed to write file: %v\n", err)
+			return
+		}
+
 	}
 }
 
-func handleTCPClient(conn net.Conn) {
-	defer conn.Close()
-	decoder := json.NewDecoder(conn)
-	encoder := json.NewEncoder(conn)
-
-	for {
-		var msg Message
-		if err := decoder.Decode(&msg); err != nil {
-			if errors.Is(err, io.EOF) {
-				// Connection closed by client, so return
-			} else {
-				fmt.Printf("handle tcp decode from %v error: %v\n", conn.RemoteAddr(), err)
-			}
-			return
-		}
-		handleMessage(&msg, encoder)
+func createHyDFSFile(localfilename string, hyDFSfilename string) bool {
+	fileContent, err := EncodeFileToBase64(localfilename)
+	if err != nil {
+		fmt.Printf("file encode error: %v", err)
 	}
+
+	target := GetRingSuccessor(GetRingId(hyDFSfilename))
+
+	v, _ := MembershipList.Load(selfId)
+	self := v.(Member)
+
+	payloadBytes, _ := json.Marshal(FilePayload{
+		Filename: hyDFSfilename,
+		DataB64:  fileContent,
+		ID:       GetUUID(),
+	})
+
+	message := Message{
+		MessageType: CreateHyDFSFile,
+		From:        &self,
+		Payload:     payloadBytes,
+	}
+
+	sendTCP(fmt.Sprintf("%s:%d", target.IP, target.Port), &message)
+
+	return true
 }
 
 func main() {
@@ -279,7 +314,8 @@ func main() {
 		Status:    Alive,
 	}
 	selfId = KeyFor(self)
-	membershipList.Store(selfId, self)
+	self.RingID = GetRingId(KeyFor(self))
+	MembershipList.Store(selfId, self)
 
 	// Listen for UDP messages
 	listenAddr, err := net.ResolveUDPAddr("udp", fmt.Sprintf(":%d", SelfPort))
@@ -349,6 +385,9 @@ func handleCommand(line string) {
 		if len(fields) != 3 {
 			fmt.Println("Usage: create <localfilename> <HyDFSfilename>")
 		}
+		localfilename := fields[1]
+		hyDFSfilename := fields[2]
+		createHyDFSFile(localfilename, hyDFSfilename)
 
 	default:
 		fmt.Println("Unknown command:", line)

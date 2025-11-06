@@ -17,6 +17,7 @@ import (
 
 var Tick int
 var MembershipList sync.Map
+var HyDFSFiles sync.Map
 
 var selfHost string
 var selfId string
@@ -245,15 +246,8 @@ func handleMessage(msg *Message, encoder *json.Encoder) { // encoder can only be
 			return
 		}
 
-		data, err := DecodeBase64ToBytes(fp.DataB64)
-		if err != nil {
-			fmt.Printf("file decode error: %v", err)
-			return
-		}
-
-		targetPath := filepath.Join("hydfs", fp.Filename)
-
-		if _, err := os.Stat(targetPath); err == nil { // file already exists
+		_, ok := HyDFSFiles.Load(fp.Filename)
+		if ok {
 			payloadBytes, _ := json.Marshal(NACK)
 			encoder.Encode(&Message{
 				MessageType: CreateHyDFSFile,
@@ -263,6 +257,24 @@ func handleMessage(msg *Message, encoder *json.Encoder) { // encoder can only be
 			return
 		}
 
+		HyDFSFiles.Store(fp.Filename, HyDFSFile{
+			Filename:               fp.Filename,
+			HyDFSCompliantFilename: GetHyDFSCompliantFilename(fp.Filename),
+			Chunks: []FilePayload{
+				{
+					Filename: fp.Filename,
+					ID:       fp.ID,
+				},
+			},
+		})
+
+		data, err := DecodeBase64ToBytes(fp.DataB64)
+		if err != nil {
+			fmt.Printf("file decode error: %v", err)
+			return
+		}
+
+		targetPath := filepath.Join("hydfs", GetHyDFSCompliantFilename(fp.Filename)+"_"+fp.ID)
 		if err := os.WriteFile(targetPath, data, 0644); err != nil {
 			fmt.Printf("failed to write file: %v\n", err)
 			return
@@ -315,7 +327,7 @@ func createHyDFSFile(localfilename string, hyDFSfilename string) bool {
 			addr := fmt.Sprintf("%s:%d", t.IP, t.Port)
 			resp, err := sendTCP(addr, &message)
 			if err != nil {
-				fmt.Printf("send to %s failed: %v\n", addr, err)
+				// fmt.Printf("send to %s failed: %v\n", addr, err)
 				return
 			}
 			results <- resp
@@ -448,7 +460,7 @@ func handleCommand(line string) {
 		hyDFSfilename := fields[2]
 		success := createHyDFSFile(localfilename, hyDFSfilename)
 		if success {
-			fmt.Printf("Written to HyDF!\n")
+			fmt.Printf("Written to HyDFS!\n")
 		} else {
 			fmt.Printf("Failed to write to HyDFS\n")
 		}

@@ -89,3 +89,7 @@ func DecodeBase64ToBytes(dataB64 string) ([]byte, error) {
 	}
 	return data, nil
 }
+
+func GetHyDFSCompliantFilename(filename string) string {
+	return strings.ReplaceAll(filename, "/", "_")
+}

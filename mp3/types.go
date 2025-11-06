@@ -19,6 +19,7 @@ const (
 	JoinReq         MessageType = "join-req"
 	JoinReply       MessageType = "join-reply"
 	CreateHyDFSFile MessageType = "create-hydfs-file"
+	AppendHyDFSFile MessageType = "append-hydfs-file"
 )
 
 type ACKType string
@@ -65,9 +66,8 @@ const (
 	TimeUnit       = time.Second * 5
 )
 
-// type HyDFSFile struct {
-// 	Filename     string
-// 	FileRingId   uint64
-// 	Chunks       []string
-// 	ChunkFileMap map[string]string
-// }
+type HyDFSFile struct {
+	Filename               string
+	HyDFSCompliantFilename string        // without slashes
+	Chunks                 []FilePayload // will contain DataB64 only during transport
+}

@@ -69,7 +69,9 @@ type Ring struct {
 }
 
 // Len returns how many entries are currently on the ring.
-func (r *Ring) Len() int { return len(r.IDs) }
+func (r *Ring) Len() int {
+	return len(r.IDs)
+}
 
 // UpperBound returns the smallest index i with IDs[i] >= target.
 // If all IDs are < target, it returns Len() (caller can wrap to 0).

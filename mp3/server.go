@@ -62,6 +62,10 @@ var membershipList sync.Map
 
 var selfHost string
 var selfId string
+var currentRing *Ring
+var RingMutex sync.Mutex
+var fileOwnership sync.Map
+var storedFiles sync.Map
 
 func keyFor(m Member) string { return fmt.Sprintf("%s:%d:%s", m.IP, m.Port, m.Timestamp) }
 
@@ -75,6 +79,12 @@ func snapshotMembers(omitFailed bool) map[string]Member {
 		return true
 	})
 	return out
+}
+
+func rebuildRing() {
+	RingMutex.Lock()
+	defer RingMutex.Unlock()
+	currentRing = BuildRing(snapshotMembers(false), true)
 }
 
 func selectKMembers(members map[string]Member, k int) []Member {
@@ -246,6 +256,10 @@ func handleMessage(conn *net.UDPConn, msg *Message) {
 			return
 		}
 		mergeMembershipList(gp.Members)
+	case "Append":
+		handleAppendMessage(conn, msg)
+	case "AppendReplicate":
+		handleAppendReplicate(conn, msg)
 	}
 }
 
@@ -331,6 +345,22 @@ func handleCommand(line string, conn *net.UDPConn) {
 
 	case "list_self":
 		fmt.Println(selfId)
+
+	case "append":
+		if len(fields) < 3 {
+			fmt.Println("Usage: append <localfilename> <HyDFSfilename>")
+			return
+		}
+		localFile := fields[1]
+		hyDFSFile := fields[2]
+
+		data, err := os.ReadFile(localFile)
+		if err != nil {
+			fmt.Printf("error reading local file: %v\n", err)
+			return
+		}
+
+		handleAppendRequest(conn, hyDFSFile, data)
 
 	default:
 		fmt.Println("Unknown command:", line)

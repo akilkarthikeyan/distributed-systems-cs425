@@ -3,189 +3,164 @@ package main
 import (
 	"bufio"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"log"
-	"math/rand/v2"
 	"net"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
 )
 
-type Status string
-
-const (
-	Alive  Status = "alive"
-	Failed Status = "failed"
-)
-
-type MessageType string
-
-const (
-	Gossip    MessageType = "gossip"
-	JoinReq   MessageType = "join-req"
-	JoinReply MessageType = "join-reply"
-)
-
-type Member struct {
-	IP          string `json:"ip"`
-	Port        int    `json:"port"`
-	Timestamp   string `json:"timestamp"`
-	Heartbeat   int    `json:"heartbeat"`
-	LastUpdated int    `json:"lastUpdated"`
-	Status      Status `json:"status"`
-}
-
-type Message struct {
-	MessageType MessageType     `json:"messageType"`
-	From        *Member         `json:"self,omitempty"`
-	Payload     json.RawMessage `json:"payload,omitempty"`
-}
-
-type GossipPayload struct {
-	Members map[string]Member `json:"Members"`
-}
-
-const (
-	SelfPort       = 1234
-	IntroducerHost = "fa25-cs425-9501.cs.illinois.edu"
-	IntroducerPort = 1234
-	Tfail          = 5
-	Tcleanup       = 5
-	K              = 3
-	TimeUnit       = time.Second * 5
-)
-
-var tick int
-var membershipList sync.Map
+var Tick int
+var MembershipList sync.Map
+var HyDFSFiles sync.Map
 
 var selfHost string
 var selfId string
-var currentRing *Ring
-var RingMutex sync.Mutex
-var fileOwnership sync.Map
-var storedFiles sync.Map
 
-func keyFor(m Member) string { return fmt.Sprintf("%s:%d:%s", m.IP, m.Port, m.Timestamp) }
+var udpConn *net.UDPConn
 
-func snapshotMembers(omitFailed bool) map[string]Member {
-	out := make(map[string]Member)
-	membershipList.Range(func(k, v any) bool {
-		if omitFailed && v.(Member).Status == Failed {
-			return true
-		}
-		out[k.(string)] = v.(Member)
-		return true
-	})
-	return out
-}
-
-func rebuildRing() {
-	RingMutex.Lock()
-	defer RingMutex.Unlock()
-	currentRing = BuildRing(snapshotMembers(false), true)
-}
-
-func selectKMembers(members map[string]Member, k int) []Member {
-	slice := make([]Member, 0, len(members))
-	for _, m := range members {
-		slice = append(slice, m)
-	}
-
-	// Fewer than k members
-	if len(slice) <= k {
-		return slice
-	}
-
-	rand.Shuffle(len(slice), func(i, j int) {
-		slice[i], slice[j] = slice[j], slice[i]
-	})
-
-	return slice[:k]
-}
-
-func sendUDP(conn *net.UDPConn, addr *net.UDPAddr, msg *Message) {
+func sendUDP(addr *net.UDPAddr, msg *Message) {
 	data, err := json.Marshal(msg)
 	if err != nil {
-		log.Printf("marshal: %v", err)
+		fmt.Printf("send udp marshal error: %v", err)
 		return
 	}
-	if _, err := conn.WriteToUDP(data, addr); err != nil {
-		log.Printf("write: %v", err)
+	if _, err := udpConn.WriteToUDP(data, addr); err != nil {
+		fmt.Printf("send udp write error: %v", err)
 	}
 }
 
-func listenUDP(conn *net.UDPConn) {
+func listenUDP() {
 	buf := make([]byte, 4096)
 	for {
-		n, raddr, err := conn.ReadFromUDP(buf)
+		n, raddr, err := udpConn.ReadFromUDP(buf)
 		if err != nil {
-			log.Printf("read: %v", err)
+			fmt.Printf("listen udp read error: %v", err)
 			continue
 		}
 		var msg Message
 		if err := json.Unmarshal(buf[:n], &msg); err != nil {
-			log.Printf("unmarshal from %v: %v", raddr, err)
+			fmt.Printf("listen udp unmarshal from %v error: %v", raddr, err)
 			continue
 		}
-		handleMessage(conn, &msg)
+		handleMessage(&msg, nil)
+	}
+}
+
+func sendTCP(addr string, msg *Message) (*Message, error) {
+	conn, err := net.Dial("tcp", addr)
+	if err != nil {
+		return nil, err
+	}
+	defer conn.Close()
+
+	decoder := json.NewDecoder(conn)
+	encoder := json.NewEncoder(conn)
+
+	// Send request
+	if err := encoder.Encode(msg); err != nil {
+		return nil, err
+	}
+
+	// Wait for response
+	var resp Message
+	if err := decoder.Decode(&resp); err != nil {
+		return nil, err
+	}
+
+	return &resp, nil
+}
+
+func listenTCP(ln net.Listener) {
+	for {
+		conn, err := ln.Accept()
+		if err != nil {
+			fmt.Printf("listen tcp accept error: %v", err)
+			continue
+		}
+		// Handle each client in a separate goroutine
+		go handleTCPClient(conn)
+	}
+}
+
+func handleTCPClient(conn net.Conn) {
+	defer conn.Close()
+	decoder := json.NewDecoder(conn)
+	encoder := json.NewEncoder(conn)
+
+	for {
+		var msg Message
+		if err := decoder.Decode(&msg); err != nil {
+			if errors.Is(err, io.EOF) {
+				// Connection closed by client, so return
+			} else {
+				fmt.Printf("handle tcp decode from %v error: %v\n", conn.RemoteAddr(), err)
+			}
+			return
+		}
+		handleMessage(&msg, encoder)
 	}
 }
 
 func mergeMembershipList(members map[string]Member) {
 	for id, m := range members {
-		v, ok := membershipList.Load(id)
+		v, ok := MembershipList.Load(id)
 		if !ok { // New member
 			newMember := Member{
 				IP:          m.IP,
 				Port:        m.Port,
 				Timestamp:   m.Timestamp,
+				RingID:      m.RingID,
 				Heartbeat:   m.Heartbeat,
-				LastUpdated: tick,
+				LastUpdated: Tick,
 				Status:      m.Status,
 			}
-			membershipList.Store(id, newMember)
+			MembershipList.Store(id, newMember)
 		} else { // Existing member
 			existing := v.(Member)
 			if m.Heartbeat > existing.Heartbeat {
 				existing.Heartbeat = m.Heartbeat
 				existing.Status = m.Status
-				existing.LastUpdated = tick
-				membershipList.Store(id, existing)
+				existing.LastUpdated = Tick
+				MembershipList.Store(id, existing)
 			}
 		}
 	}
 }
 
-func gossip(conn *net.UDPConn, interval time.Duration) {
+func gossip(interval time.Duration) {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
 	for range ticker.C {
-		tick++
+		Tick++
 
 		// Increment self heartbeat
-		v, _ := membershipList.Load(selfId)
+		v, _ := MembershipList.Load(selfId)
 		self := v.(Member)
 
 		self.Status = Alive
 		self.Heartbeat++
-		self.LastUpdated = tick
-		membershipList.Store(selfId, self)
+		self.LastUpdated = Tick
+		MembershipList.Store(selfId, self)
 
 		// Check for failed/suspected members
-		membershipList.Range(func(k, v any) bool {
+		MembershipList.Range(func(k, v any) bool {
 			m := v.(Member)
-			elapsed := tick - m.LastUpdated
+			elapsed := Tick - m.LastUpdated
 
 			if m.Status == Alive && elapsed >= Tfail {
 				m.Status = Failed
-				m.LastUpdated = tick
-				membershipList.Store(k.(string), m)
+				m.LastUpdated = Tick
+				MembershipList.Store(k.(string), m)
 				// fmt.Printf("[FAIL] %s marked failed at tick %d\n", k.(string), tick)
 			} else if m.Status == Failed && elapsed >= Tcleanup {
-				membershipList.Delete(k.(string))
+				MembershipList.Delete(k.(string))
 				// fmt.Printf("[DELETE] %s removed from membership list at tick %d\n", k.(string), tick)
 			}
 
@@ -193,16 +168,16 @@ func gossip(conn *net.UDPConn, interval time.Duration) {
 		})
 
 		// Select K random members to gossip to (exlude self)
-		members := snapshotMembers(true)
+		members := SnapshotMembers(true)
 		delete(members, selfId)
-		targets := selectKMembers(members, K)
+		targets := SelectKMembers(members, K)
 		members[selfId] = self // add self back
 
 		// Gossip
 		for _, target := range targets {
 			targetAddr, err := net.ResolveUDPAddr("udp", fmt.Sprintf("%s:%d", target.IP, target.Port))
 			if err != nil {
-				log.Printf("resolve target: %v", err)
+				fmt.Printf("gossip resolve target error: %v", err)
 				continue
 			}
 			payloadBytes, _ := json.Marshal(GossipPayload{Members: members})
@@ -211,28 +186,30 @@ func gossip(conn *net.UDPConn, interval time.Duration) {
 				From:        &self,
 				Payload:     payloadBytes,
 			}
-			sendUDP(conn, targetAddr, &msg)
-			log.Printf("sent %s to %s", msg.MessageType, keyFor(target))
+			sendUDP(targetAddr, &msg)
+			log.Printf("sent %s to %s", msg.MessageType, KeyFor(target))
 		}
 	}
 }
 
-func handleMessage(conn *net.UDPConn, msg *Message) {
-	log.Printf("recv %s from %s", msg.MessageType, keyFor(*msg.From))
+func handleMessage(msg *Message, encoder *json.Encoder) { // encoder can only be present for TCP messages
+	log.Printf("recv %s from %s", msg.MessageType, KeyFor(*msg.From))
 
 	switch msg.MessageType {
+	// UDP message
 	case Gossip:
 		var gp GossipPayload
 		if err := json.Unmarshal(msg.Payload, &gp); err != nil {
-			log.Printf("gossip payload unmarshal: %v", err)
+			fmt.Printf("gossip payload unmarshal error: %v", err)
 			return
 		}
 		mergeMembershipList(gp.Members)
 
+	// UDP message
 	case JoinReq:
 		// Send JoinReply with current membership list
-		members := snapshotMembers(true)
-		v, _ := membershipList.Load(selfId)
+		members := SnapshotMembers(true)
+		v, _ := MembershipList.Load(selfId)
 		self := v.(Member)
 
 		payloadBytes, _ := json.Marshal(GossipPayload{Members: members})
@@ -243,93 +220,277 @@ func handleMessage(conn *net.UDPConn, msg *Message) {
 		}
 		senderAddr, err := net.ResolveUDPAddr("udp", fmt.Sprintf("%s:%d", msg.From.IP, msg.From.Port))
 		if err != nil {
-			log.Printf("resolve sender: %v", err)
+			fmt.Printf("resolve sender error: %v", err)
 			return
 		}
-		sendUDP(conn, senderAddr, &reply)
-		log.Printf("sent %s to %s", reply.MessageType, keyFor(*msg.From))
+		sendUDP(senderAddr, &reply)
+		log.Printf("sent %s to %s", reply.MessageType, KeyFor(*msg.From))
 
+	// UDP message
 	case JoinReply:
 		var gp GossipPayload
 		if err := json.Unmarshal(msg.Payload, &gp); err != nil {
-			log.Printf("gossip payload unmarshal: %v", err)
+			fmt.Printf("gossip payload unmarshal error: %v", err)
 			return
 		}
 		mergeMembershipList(gp.Members)
-	case "Append":
-		handleAppendMessage(conn, msg)
-	case "AppendReplicate":
-		handleAppendReplicate(conn, msg)
+
+	// TCP message
+	case CreateHyDFSFile: // Returns ACK, or NACK if file already exists
+		v, _ := MembershipList.Load(selfId)
+		self := v.(Member)
+
+		var fp FilePayload
+		if err := json.Unmarshal(msg.Payload, &fp); err != nil {
+			fmt.Printf("file payload unmarshal error: %v", err)
+			return
+		}
+
+		_, ok := HyDFSFiles.Load(fp.Filename)
+		if ok {
+			payloadBytes, _ := json.Marshal(NACK)
+			encoder.Encode(&Message{
+				MessageType: CreateHyDFSFile,
+				From:        &self,
+				Payload:     payloadBytes,
+			})
+			return
+		}
+
+		HyDFSFiles.Store(fp.Filename, HyDFSFile{
+			Filename:               fp.Filename,
+			HyDFSCompliantFilename: GetHyDFSCompliantFilename(fp.Filename),
+			Chunks: []FilePayload{
+				{
+					Filename: fp.Filename,
+					ID:       fp.ID,
+				},
+			},
+		})
+
+		data, err := DecodeBase64ToBytes(fp.DataB64)
+		if err != nil {
+			fmt.Printf("file decode error: %v", err)
+			return
+		}
+
+		targetPath := filepath.Join("hydfs", GetHyDFSCompliantFilename(fp.Filename)+"_"+fp.ID)
+		if err := os.WriteFile(targetPath, data, 0644); err != nil {
+			fmt.Printf("failed to write file: %v\n", err)
+			return
+		}
+
+		payloadBytes, _ := json.Marshal(ACK)
+		encoder.Encode(&Message{
+			MessageType: CreateHyDFSFile,
+			From:        &self,
+			Payload:     payloadBytes,
+		})
+
+	// TCP message
+	case AppendHyDFSFile: // Returns ACK, or NACK if file does not exist
+		v, _ := MembershipList.Load(selfId)
+		self := v.(Member)
+
+		var fp FilePayload
+		if err := json.Unmarshal(msg.Payload, &fp); err != nil {
+			fmt.Printf("file payload unmarshal error: %v", err)
+			return
+		}
+
+		w, ok := HyDFSFiles.Load(fp.Filename)
+		if !ok {
+			payloadBytes, _ := json.Marshal(NACK)
+			encoder.Encode(&Message{
+				MessageType: AppendHyDFSFile,
+				From:        &self,
+				Payload:     payloadBytes,
+			})
+			return
+		}
+
+		hyDFSFile := w.(HyDFSFile)
+		hyDFSFile.Chunks = append(hyDFSFile.Chunks, FilePayload{
+			Filename: fp.Filename,
+			ID:       fp.ID,
+		})
+		HyDFSFiles.Store(fp.Filename, hyDFSFile)
+
+		data, err := DecodeBase64ToBytes(fp.DataB64)
+		if err != nil {
+			fmt.Printf("file decode error: %v", err)
+			return
+		}
+
+		targetPath := filepath.Join("hydfs", GetHyDFSCompliantFilename(fp.Filename)+"_"+fp.ID)
+		if err := os.WriteFile(targetPath, data, 0644); err != nil {
+			fmt.Printf("failed to write file: %v\n", err)
+			return
+		}
+
+		payloadBytes, _ := json.Marshal(ACK)
+		encoder.Encode(&Message{
+			MessageType: AppendHyDFSFile,
+			From:        &self,
+			Payload:     payloadBytes,
+		})
 	}
+}
+
+func writeHyDFSFile(localfilename string, hyDFSfilename string, create bool) bool {
+	// Writes to a quorum of 3 replicas
+	targets := make([]Member, 0, 3)
+
+	targets = append(targets, GetRingSuccessor(GetRingId(hyDFSfilename)))
+	targets = append(targets, GetRingSuccessor(GetRingId(KeyFor(targets[0]))))
+	targets = append(targets, GetRingSuccessor(GetRingId(KeyFor(targets[1]))))
+
+	fileContent, err := EncodeFileToBase64(localfilename)
+	if err != nil {
+		fmt.Printf("file encode error: %v", err)
+	}
+
+	v, _ := MembershipList.Load(selfId)
+	self := v.(Member)
+
+	payloadBytes, _ := json.Marshal(FilePayload{
+		Filename: hyDFSfilename,
+		DataB64:  fileContent,
+		ID:       GetUUID(),
+	})
+
+	var msgType MessageType
+	if create {
+		msgType = CreateHyDFSFile
+	} else {
+		msgType = AppendHyDFSFile
+	}
+
+	message := Message{
+		MessageType: msgType,
+		From:        &self,
+		Payload:     payloadBytes,
+	}
+
+	var wg sync.WaitGroup
+	results := make(chan *Message, len(targets))
+	wg.Add(len(targets))
+
+	for _, t := range targets {
+		go func() {
+			defer wg.Done()
+			addr := fmt.Sprintf("%s:%d", t.IP, t.Port)
+			resp, err := sendTCP(addr, &message)
+			if err != nil {
+				// fmt.Printf("send to %s failed: %v\n", addr, err)
+				return
+			}
+			results <- resp
+		}()
+	}
+
+	wg.Wait()
+	close(results)
+
+	var all []*Message
+	for r := range results {
+		all = append(all, r)
+	}
+
+	successes := 0
+	for _, message := range all {
+		var ack ACKType
+		if err := json.Unmarshal(message.Payload, &ack); err != nil {
+			fmt.Printf("ack unmarshal error: %v", err)
+			continue
+		}
+		if ack == ACK {
+			successes++
+		}
+	}
+
+	return successes == 3
 }
 
 func main() {
 	f, err := os.OpenFile("machine.log", os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
 	if err != nil {
-		log.Fatalf("error opening log file: %v", err)
+		fmt.Printf("log file open error: %v", err)
 	}
 	defer f.Close()
 	log.SetOutput(f)
 
+	// Erase previous hydfs files and make dir
+	os.RemoveAll("hydfs")
+	os.Mkdir("hydfs", 0755)
+
 	// Get self hostname
 	hostname, err := os.Hostname()
 	if err != nil {
-		log.Fatalf("get hostname: %v", err)
+		fmt.Printf("get hostname error: %v", err)
 	}
 	selfHost = hostname
-
-	// Bind locally on all interfaces: SelfPort
-	listenAddr, err := net.ResolveUDPAddr("udp", fmt.Sprintf(":%d", SelfPort))
-	if err != nil {
-		log.Fatalf("resolve listen: %v", err)
-	}
-	conn, err := net.ListenUDP("udp", listenAddr)
-	if err != nil {
-		log.Fatalf("listen: %v", err)
-	}
-	defer conn.Close()
 
 	// Add self to membership list
 	self := Member{
 		IP:        selfHost,
 		Port:      SelfPort,
-		Timestamp: time.Now().Format(time.RFC3339Nano),
+		Timestamp: GetUUID(), // unique
 		Heartbeat: 0,
 		Status:    Alive,
 	}
-	selfId = keyFor(self)
-	membershipList.Store(selfId, self)
+	selfId = KeyFor(self)
+	self.RingID = GetRingId(KeyFor(self))
+	MembershipList.Store(selfId, self)
 
-	// Listen for messages
-	go listenUDP(conn)
+	// Listen for UDP messages
+	listenAddr, err := net.ResolveUDPAddr("udp", fmt.Sprintf(":%d", SelfPort))
+	if err != nil {
+		fmt.Printf("resolve listenAddr error: %v", err)
+	}
+	udpConn, err = net.ListenUDP("udp", listenAddr)
+	if err != nil {
+		fmt.Printf("udp error: %v", err)
+	}
+	defer udpConn.Close()
+
+	go listenUDP()
+
+	// Listen for TCP messages
+	tcpLn, err := net.Listen("tcp", fmt.Sprintf(":%d", SelfPort))
+	if err != nil {
+		fmt.Printf("tcp error: %v", err)
+	}
+
+	go listenTCP(tcpLn)
 
 	// Send join to introducer iff we are not the introducer
 	if !(selfHost == IntroducerHost && SelfPort == IntroducerPort) {
 		introducerAddr, err := net.ResolveUDPAddr("udp", fmt.Sprintf("%s:%d", IntroducerHost, IntroducerPort))
 		if err != nil {
-			log.Fatalf("resolve introducer: %v", err)
+			fmt.Printf("resolve introducerAddr error: %v", err)
 		}
 		initial := Message{
 			MessageType: JoinReq,
 			From:        &self,
 		}
-		sendUDP(conn, introducerAddr, &initial)
+		sendUDP(introducerAddr, &initial)
 		log.Printf("sent %s to %s:%d", initial.MessageType, IntroducerHost, IntroducerPort)
 	}
 
-	go gossip(conn, TimeUnit)
+	go gossip(TimeUnit)
 
 	scanner := bufio.NewScanner(os.Stdin)
 	for scanner.Scan() {
 		line := scanner.Text()
-		handleCommand(line, conn)
+		handleCommand(line)
 	}
 	if err := scanner.Err(); err != nil {
 		fmt.Printf("stdin error: %v\n", err)
 	}
 }
 
-func handleCommand(line string, conn *net.UDPConn) {
+func handleCommand(line string) {
 	fields := strings.Fields(line)
 	if len(fields) == 0 {
 		return
@@ -337,7 +498,7 @@ func handleCommand(line string, conn *net.UDPConn) {
 
 	switch fields[0] {
 	case "list_mem":
-		members := snapshotMembers(false)
+		members := SnapshotMembers(false)
 		fmt.Printf("Membership List:\n")
 		for id, m := range members {
 			fmt.Printf("%s - Status: %s, Heartbeat: %d, LastUpdated: %d\n", id, m.Status, m.Heartbeat, m.LastUpdated)
@@ -346,21 +507,31 @@ func handleCommand(line string, conn *net.UDPConn) {
 	case "list_self":
 		fmt.Println(selfId)
 
+	case "create":
+		if len(fields) != 3 {
+			fmt.Println("Usage: create <localfilename> <HyDFSfilename>")
+		}
+		localfilename := fields[1]
+		hyDFSfilename := fields[2]
+		success := writeHyDFSFile(localfilename, hyDFSfilename, true)
+		if success {
+			fmt.Printf("%s written to HyDFS!\n", hyDFSfilename)
+		} else {
+			fmt.Printf("Failed to write to HyDFS\n")
+		}
+
 	case "append":
-		if len(fields) < 3 {
+		if len(fields) != 3 {
 			fmt.Println("Usage: append <localfilename> <HyDFSfilename>")
-			return
 		}
-		localFile := fields[1]
-		hyDFSFile := fields[2]
-
-		data, err := os.ReadFile(localFile)
-		if err != nil {
-			fmt.Printf("error reading local file: %v\n", err)
-			return
+		localfilename := fields[1]
+		hyDFSfilename := fields[2]
+		success := writeHyDFSFile(localfilename, hyDFSfilename, false)
+		if success {
+			fmt.Printf("Appended to HyDFS file %s!\n", hyDFSfilename)
+		} else {
+			fmt.Printf("Failed to append to HyDFS\n")
 		}
-
-		handleAppendRequest(conn, hyDFSFile, data)
 
 	default:
 		fmt.Println("Unknown command:", line)

@@ -286,10 +286,58 @@ func handleMessage(msg *Message, encoder *json.Encoder) { // encoder can only be
 			From:        &self,
 			Payload:     payloadBytes,
 		})
+
+	// TCP message
+	case AppendHyDFSFile: // Returns ACK, or NACK if file does not exist
+		v, _ := MembershipList.Load(selfId)
+		self := v.(Member)
+
+		var fp FilePayload
+		if err := json.Unmarshal(msg.Payload, &fp); err != nil {
+			fmt.Printf("file payload unmarshal error: %v", err)
+			return
+		}
+
+		w, ok := HyDFSFiles.Load(fp.Filename)
+		if !ok {
+			payloadBytes, _ := json.Marshal(NACK)
+			encoder.Encode(&Message{
+				MessageType: AppendHyDFSFile,
+				From:        &self,
+				Payload:     payloadBytes,
+			})
+			return
+		}
+
+		hyDFSFile := w.(HyDFSFile)
+		hyDFSFile.Chunks = append(hyDFSFile.Chunks, FilePayload{
+			Filename: fp.Filename,
+			ID:       fp.ID,
+		})
+		HyDFSFiles.Store(fp.Filename, hyDFSFile)
+
+		data, err := DecodeBase64ToBytes(fp.DataB64)
+		if err != nil {
+			fmt.Printf("file decode error: %v", err)
+			return
+		}
+
+		targetPath := filepath.Join("hydfs", GetHyDFSCompliantFilename(fp.Filename)+"_"+fp.ID)
+		if err := os.WriteFile(targetPath, data, 0644); err != nil {
+			fmt.Printf("failed to write file: %v\n", err)
+			return
+		}
+
+		payloadBytes, _ := json.Marshal(ACK)
+		encoder.Encode(&Message{
+			MessageType: AppendHyDFSFile,
+			From:        &self,
+			Payload:     payloadBytes,
+		})
 	}
 }
 
-func createHyDFSFile(localfilename string, hyDFSfilename string) bool {
+func writeHyDFSFile(localfilename string, hyDFSfilename string, create bool) bool {
 	// Writes to a quorum of 3 replicas
 	targets := make([]Member, 0, 3)
 
@@ -311,8 +359,15 @@ func createHyDFSFile(localfilename string, hyDFSfilename string) bool {
 		ID:       GetUUID(),
 	})
 
+	var msgType MessageType
+	if create {
+		msgType = CreateHyDFSFile
+	} else {
+		msgType = AppendHyDFSFile
+	}
+
 	message := Message{
-		MessageType: CreateHyDFSFile,
+		MessageType: msgType,
 		From:        &self,
 		Payload:     payloadBytes,
 	}
@@ -458,11 +513,24 @@ func handleCommand(line string) {
 		}
 		localfilename := fields[1]
 		hyDFSfilename := fields[2]
-		success := createHyDFSFile(localfilename, hyDFSfilename)
+		success := writeHyDFSFile(localfilename, hyDFSfilename, true)
 		if success {
-			fmt.Printf("Written to HyDFS!\n")
+			fmt.Printf("%s written to HyDFS!\n", hyDFSfilename)
 		} else {
 			fmt.Printf("Failed to write to HyDFS\n")
+		}
+
+	case "append":
+		if len(fields) != 3 {
+			fmt.Println("Usage: append <localfilename> <HyDFSfilename>")
+		}
+		localfilename := fields[1]
+		hyDFSfilename := fields[2]
+		success := writeHyDFSFile(localfilename, hyDFSfilename, false)
+		if success {
+			fmt.Printf("Appended to HyDFS file %s!\n", hyDFSfilename)
+		} else {
+			fmt.Printf("Failed to append to HyDFS\n")
 		}
 
 	default:

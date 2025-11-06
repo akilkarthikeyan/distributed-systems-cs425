@@ -21,6 +21,13 @@ const (
 	CreateHyDFSFile MessageType = "create-hydfs-file"
 )
 
+type ACKType string
+
+const (
+	ACK  ACKType = "ack"
+	NACK ACKType = "nack"
+)
+
 type Member struct {
 	// Gossip-related fields
 	IP          string `json:"ip"`

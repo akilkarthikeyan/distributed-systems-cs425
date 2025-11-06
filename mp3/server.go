@@ -235,7 +235,10 @@ func handleMessage(msg *Message, encoder *json.Encoder) { // encoder can only be
 		mergeMembershipList(gp.Members)
 
 	// TCP message
-	case CreateHyDFSFile:
+	case CreateHyDFSFile: // Returns ACK, or NACK if file already exists
+		v, _ := MembershipList.Load(selfId)
+		self := v.(Member)
+
 		var fp FilePayload
 		if err := json.Unmarshal(msg.Payload, &fp); err != nil {
 			fmt.Printf("file payload unmarshal error: %v", err)
@@ -248,27 +251,44 @@ func handleMessage(msg *Message, encoder *json.Encoder) { // encoder can only be
 			return
 		}
 
-		if err := os.MkdirAll("hydfs", 0755); err != nil {
-			fmt.Printf("failed to create hydfs dir: %v\n", err)
+		targetPath := filepath.Join("hydfs", fp.Filename)
+
+		if _, err := os.Stat(targetPath); err == nil { // file already exists
+			payloadBytes, _ := json.Marshal(NACK)
+			encoder.Encode(&Message{
+				MessageType: CreateHyDFSFile,
+				From:        &self,
+				Payload:     payloadBytes,
+			})
 			return
 		}
 
-		targetPath := filepath.Join("hydfs", fp.Filename)
 		if err := os.WriteFile(targetPath, data, 0644); err != nil {
 			fmt.Printf("failed to write file: %v\n", err)
 			return
 		}
 
+		payloadBytes, _ := json.Marshal(ACK)
+		encoder.Encode(&Message{
+			MessageType: CreateHyDFSFile,
+			From:        &self,
+			Payload:     payloadBytes,
+		})
 	}
 }
 
 func createHyDFSFile(localfilename string, hyDFSfilename string) bool {
+	// Writes to a quorum of 3 replicas
+	targets := make([]Member, 0, 3)
+
+	targets = append(targets, GetRingSuccessor(GetRingId(hyDFSfilename)))
+	targets = append(targets, GetRingSuccessor(GetRingId(KeyFor(targets[0]))))
+	targets = append(targets, GetRingSuccessor(GetRingId(KeyFor(targets[1]))))
+
 	fileContent, err := EncodeFileToBase64(localfilename)
 	if err != nil {
 		fmt.Printf("file encode error: %v", err)
 	}
-
-	target := GetRingSuccessor(GetRingId(hyDFSfilename))
 
 	v, _ := MembershipList.Load(selfId)
 	self := v.(Member)
@@ -285,9 +305,44 @@ func createHyDFSFile(localfilename string, hyDFSfilename string) bool {
 		Payload:     payloadBytes,
 	}
 
-	sendTCP(fmt.Sprintf("%s:%d", target.IP, target.Port), &message)
+	var wg sync.WaitGroup
+	results := make(chan *Message, len(targets))
+	wg.Add(len(targets))
 
-	return true
+	for _, t := range targets {
+		go func() {
+			defer wg.Done()
+			addr := fmt.Sprintf("%s:%d", t.IP, t.Port)
+			resp, err := sendTCP(addr, &message)
+			if err != nil {
+				fmt.Printf("send to %s failed: %v\n", addr, err)
+				return
+			}
+			results <- resp
+		}()
+	}
+
+	wg.Wait()
+	close(results)
+
+	var all []*Message
+	for r := range results {
+		all = append(all, r)
+	}
+
+	successes := 0
+	for _, message := range all {
+		var ack ACKType
+		if err := json.Unmarshal(message.Payload, &ack); err != nil {
+			fmt.Printf("ack unmarshal error: %v", err)
+			continue
+		}
+		if ack == ACK {
+			successes++
+		}
+	}
+
+	return successes == 3
 }
 
 func main() {
@@ -297,6 +352,10 @@ func main() {
 	}
 	defer f.Close()
 	log.SetOutput(f)
+
+	// Erase previous hydfs files and make dir
+	os.RemoveAll("hydfs")
+	os.Mkdir("hydfs", 0755)
 
 	// Get self hostname
 	hostname, err := os.Hostname()
@@ -349,7 +408,7 @@ func main() {
 			From:        &self,
 		}
 		sendUDP(introducerAddr, &initial)
-		// log.Printf("sent %s to %s:%d", initial.MessageType, IntroducerHost, IntroducerPort)
+		log.Printf("sent %s to %s:%d", initial.MessageType, IntroducerHost, IntroducerPort)
 	}
 
 	go gossip(TimeUnit)
@@ -387,7 +446,12 @@ func handleCommand(line string) {
 		}
 		localfilename := fields[1]
 		hyDFSfilename := fields[2]
-		createHyDFSFile(localfilename, hyDFSfilename)
+		success := createHyDFSFile(localfilename, hyDFSfilename)
+		if success {
+			fmt.Printf("Written to HyDF!\n")
+		} else {
+			fmt.Printf("Failed to write to HyDFS\n")
+		}
 
 	default:
 		fmt.Println("Unknown command:", line)

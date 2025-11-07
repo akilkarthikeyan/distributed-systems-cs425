@@ -509,18 +509,17 @@ func readHyDFSFile(hyDFSfilename string, localfilename string) bool {
 	for i := 0; i < len(targets); i++ {
 		ghfp := <-result
 		if ghfp.Ack == ACK {
-			var combinedB64 string
+			var full []byte
 			for _, fp := range ghfp.FilePayloads {
-				combinedB64 += fp.DataB64
+				data, err := DecodeBase64ToBytes(fp.DataB64)
+				if err != nil {
+					fmt.Printf("file decode error: %v", err)
+					return false
+				}
+				full = append(full, data...)
 			}
 
-			data, err := DecodeBase64ToBytes(combinedB64)
-			if err != nil {
-				fmt.Printf("file decode error: %v", err)
-				return false
-			}
-
-			if err := os.WriteFile(localfilename, data, 0644); err != nil {
+			if err := os.WriteFile(localfilename, full, 0644); err != nil {
 				fmt.Printf("failed to write file: %v\n", err)
 				return false
 			}

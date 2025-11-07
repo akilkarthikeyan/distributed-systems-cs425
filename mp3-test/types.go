@@ -79,9 +79,17 @@ type AppendHyDFSFileResponse struct {
 	Ack ACKType `json:"ack"`
 }
 
+type GetHyDFSFilesRequestType string
+
+const (
+	All     GetHyDFSFilesRequestType = "all"
+	Primary GetHyDFSFilesRequestType = "primary"
+	One     GetHyDFSFilesRequestType = "one"
+)
+
 type GetHyDFSFilesRequest struct {
-	Filename string `json:"filename"`
-	All      bool   `json:"all"` // if true, get all files
+	Filename    string                   `json:"filename"`
+	RequestType GetHyDFSFilesRequestType `json:"requestType"`
 }
 
 type GetHyDFSFilesResponse struct {

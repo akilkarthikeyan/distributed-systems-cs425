@@ -238,7 +238,7 @@ func handleMessage(msg *Message, encoder *json.Encoder) { // encoder can only be
 
 		// Get all files from successor
 		target := GetRingSuccessor(GetRingId(selfId))
-		files, err := getFilesFromTarget(target, "", true)
+		files, err := getFilesFromTarget(target, "", All)
 		if err != nil {
 			fmt.Printf("get files from target error: %v", err)
 			return
@@ -383,7 +383,7 @@ func handleMessage(msg *Message, encoder *json.Encoder) { // encoder can only be
 		})
 
 	// TCP message
-	case GetHyDFSFiles: // Returns file payloads if file exists, else NACK; If "ALL", returns all files with an ACK
+	case GetHyDFSFiles: // Returns file payloads if file exists, else NACK; If "All", returns all files with an ACK, If "Primary", returns primary files only
 		v, _ := MembershipList.Load(selfId)
 		self := v.(Member)
 
@@ -393,7 +393,7 @@ func handleMessage(msg *Message, encoder *json.Encoder) { // encoder can only be
 			return
 		}
 
-		if ghfr.All {
+		if ghfr.RequestType == All {
 			allFiles := make(map[string]HyDFSFile)
 			HyDFSFiles.Range(func(k, v any) bool {
 				filename := k.(string)
@@ -430,7 +430,7 @@ func handleMessage(msg *Message, encoder *json.Encoder) { // encoder can only be
 				From:        &self,
 				Payload:     payloadBytes,
 			})
-		} else {
+		} else if ghfr.RequestType == One {
 			filename := ghfr.Filename
 			w, ok := HyDFSFiles.Load(filename)
 			if !ok {
@@ -593,8 +593,8 @@ func getHyDFSFile(hyDFSfilename string, localfilename string) bool {
 	self := v.(Member)
 
 	payloadBytes, _ := json.Marshal(GetHyDFSFilesRequest{
-		Filename: hyDFSfilename,
-		All:      false,
+		Filename:    hyDFSfilename,
+		RequestType: One,
 	})
 	req := Message{
 		MessageType: GetHyDFSFiles,
@@ -652,13 +652,13 @@ func getHyDFSFile(hyDFSfilename string, localfilename string) bool {
 	return false
 }
 
-func getFilesFromTarget(target Member, hyDFSfilename string, all bool) (map[string]HyDFSFile, error) {
+func getFilesFromTarget(target Member, hyDFSfilename string, requestType GetHyDFSFilesRequestType) (map[string]HyDFSFile, error) {
 	v, _ := MembershipList.Load(selfId)
 	self := v.(Member)
 
 	payloadBytes, _ := json.Marshal(GetHyDFSFilesRequest{
-		Filename: hyDFSfilename,
-		All:      all,
+		Filename:    hyDFSfilename,
+		RequestType: requestType,
 	})
 	req := Message{
 		MessageType: GetHyDFSFiles,

@@ -160,7 +160,7 @@ func gossip(interval time.Duration) {
 				m.LastUpdated = Tick
 				MembershipList.Store(k.(string), m)
 				// fmt.Printf("[FAIL] %s marked failed at tick %d\n", k.(string), tick)
-				handleNodeFail(m, SnapshotMembers(true))
+				go handleNodeFail(m, SnapshotMembers(true))
 			} else if m.Status == Failed && elapsed >= Tcleanup {
 				MembershipList.Delete(k.(string))
 				// fmt.Printf("[DELETE] %s removed from membership list at tick %d\n", k.(string), tick)
@@ -433,6 +433,49 @@ func handleMessage(msg *Message, encoder *json.Encoder) { // encoder can only be
 				Payload:     payloadBytes,
 			})
 
+		case Primary:
+			primaryFiles := make(map[string]HyDFSFile)
+			membershipList := SnapshotMembers(true)
+
+			HyDFSFiles.Range(func(k, v any) bool {
+				filename := k.(string)
+				hyDFSFile := v.(HyDFSFile)
+				if KeyFor(GetRingSuccessor(GetRingId(filename), membershipList)) != selfId {
+					return true
+				}
+
+				chunks := make([]File, 0)
+				for _, chunk := range hyDFSFile.Chunks {
+					targetPath := filepath.Join("hydfs", GetHyDFSCompliantFilename(chunk.Filename)+"_"+chunk.ID)
+					data, err := EncodeFileToBase64(targetPath)
+					if err != nil {
+						fmt.Printf("file encode error: %v", err)
+						return false
+					}
+					chunks = append(chunks, File{
+						Filename: chunk.Filename,
+						DataB64:  data,
+						ID:       chunk.ID,
+					})
+				}
+
+				primaryFiles[filename] = HyDFSFile{
+					Filename: filename,
+					Chunks:   chunks,
+				}
+				return true
+			})
+
+			payloadBytes, _ := json.Marshal(GetHyDFSFilesResponse{
+				Ack:        ACK,
+				HyDFSFiles: primaryFiles,
+			})
+			encoder.Encode(&Message{
+				MessageType: GetHyDFSFiles,
+				From:        &self,
+				Payload:     payloadBytes,
+			})
+
 		case One:
 			filename := ghfr.Filename
 			w, ok := HyDFSFiles.Load(filename)
@@ -685,14 +728,127 @@ func getFilesFromTarget(target Member, hyDFSfilename string, requestType GetHyDF
 	return ghfr.HyDFSFiles, nil
 }
 
+// redistributes replicas
 func handleNodeFail(m Member, membershipList map[string]Member) {
 	// take responsibilty for member if you are a successor or successor's successor (3 replicas)
 	successor := GetRingSuccessor(GetRingId(KeyFor(m)), membershipList)
 	successor2 := GetRingSuccessor(GetRingId(KeyFor(successor)), membershipList)
-	if KeyFor(successor) != selfId && KeyFor(successor2) != selfId {
+	predecessor := GetRingPredecessor(GetRingId(selfId), membershipList)
+	predecessor2 := GetRingPredecessor(GetRingId(KeyFor(predecessor)), membershipList)
+
+	if KeyFor(successor) == selfId {
+		// get primary files from predecessor (this should technically already be in self)
+		files, err := getFilesFromTarget(predecessor, "", Primary)
+		if err != nil {
+			fmt.Printf("get files from target error: %v", err)
+			return
+		}
+
+		for filename, hyDFSFile := range files {
+			_, ok := HyDFSFiles.Load(filename)
+			if ok {
+				continue
+			}
+			chunks := make([]File, 0)
+			for _, chunk := range hyDFSFile.Chunks {
+				data, err := DecodeBase64ToBytes(chunk.DataB64)
+				if err != nil {
+					fmt.Printf("file decode error: %v", err)
+					return
+				}
+				targetPath := filepath.Join("hydfs", GetHyDFSCompliantFilename(filename)+"_"+chunk.ID)
+				if err := os.WriteFile(targetPath, data, 0644); err != nil {
+					fmt.Printf("failed to write file: %v\n", err)
+					return
+				}
+				chunks = append(chunks, File{
+					Filename: filename,
+					ID:       chunk.ID,
+				})
+			}
+			HyDFSFiles.Store(filename, HyDFSFile{
+				Filename:               filename,
+				HyDFSCompliantFilename: GetHyDFSCompliantFilename(filename),
+				Chunks:                 chunks,
+			})
+		}
+
+		// get primary files from predecessor2
+		files2, err := getFilesFromTarget(predecessor2, "", Primary)
+		if err != nil {
+			fmt.Printf("get files from target error: %v", err)
+			return
+		}
+
+		for filename, hyDFSFile := range files2 {
+			_, ok := HyDFSFiles.Load(filename)
+			if ok {
+				continue
+			}
+			chunks := make([]File, 0)
+			for _, chunk := range hyDFSFile.Chunks {
+				data, err := DecodeBase64ToBytes(chunk.DataB64)
+				if err != nil {
+					fmt.Printf("file decode error: %v", err)
+					return
+				}
+				targetPath := filepath.Join("hydfs", GetHyDFSCompliantFilename(filename)+"_"+chunk.ID)
+				if err := os.WriteFile(targetPath, data, 0644); err != nil {
+					fmt.Printf("failed to write file: %v\n", err)
+					return
+				}
+				chunks = append(chunks, File{
+					Filename: filename,
+					ID:       chunk.ID,
+				})
+			}
+			HyDFSFiles.Store(filename, HyDFSFile{
+				Filename:               filename,
+				HyDFSCompliantFilename: GetHyDFSCompliantFilename(filename),
+				Chunks:                 chunks,
+			})
+		}
+
+	} else if KeyFor(successor2) == selfId {
+		// get primary files from predecessor2
+		files2, err := getFilesFromTarget(predecessor2, "", Primary)
+		if err != nil {
+			fmt.Printf("get files from target error: %v", err)
+			return
+		}
+
+		for filename, hyDFSFile := range files2 {
+			_, ok := HyDFSFiles.Load(filename)
+			if ok {
+				continue
+			}
+			chunks := make([]File, 0)
+			for _, chunk := range hyDFSFile.Chunks {
+				data, err := DecodeBase64ToBytes(chunk.DataB64)
+				if err != nil {
+					fmt.Printf("file decode error: %v", err)
+					return
+				}
+				targetPath := filepath.Join("hydfs", GetHyDFSCompliantFilename(filename)+"_"+chunk.ID)
+				if err := os.WriteFile(targetPath, data, 0644); err != nil {
+					fmt.Printf("failed to write file: %v\n", err)
+					return
+				}
+				chunks = append(chunks, File{
+					Filename: filename,
+					ID:       chunk.ID,
+				})
+			}
+			HyDFSFiles.Store(filename, HyDFSFile{
+				Filename:               filename,
+				HyDFSCompliantFilename: GetHyDFSCompliantFilename(filename),
+				Chunks:                 chunks,
+			})
+		}
+
+	} else {
 		return
 	}
-
 }
 
 func main() {

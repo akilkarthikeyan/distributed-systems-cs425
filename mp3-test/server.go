@@ -536,7 +536,10 @@ func getHyDFSFile(hyDFSfilename string, localfilename string) bool {
 	v, _ := MembershipList.Load(selfId)
 	self := v.(Member)
 
-	payloadBytes, _ := json.Marshal(hyDFSfilename)
+	payloadBytes, _ := json.Marshal(GetHyDFSFilesRequest{
+		Filename: hyDFSfilename,
+		All:      false,
+	})
 	req := Message{
 		MessageType: GetHyDFSFiles,
 		From:        &self,

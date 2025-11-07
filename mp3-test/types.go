@@ -20,6 +20,7 @@ const (
 	JoinReply       MessageType = "join-reply"
 	CreateHyDFSFile MessageType = "create-hydfs-file"
 	AppendHyDFSFile MessageType = "append-hydfs-file"
+	GetHyDFSFile    MessageType = "get-hydfs-file"
 )
 
 type ACKType string
@@ -48,6 +49,11 @@ type Message struct {
 
 type GossipPayload struct {
 	Members map[string]Member `json:"Members"`
+}
+
+type GetHyDFSFilePayload struct {
+	Ack          ACKType       `json:"ack"`
+	FilePayloads []FilePayload `json:"filePayloads,omitempty"`
 }
 
 type FilePayload struct {

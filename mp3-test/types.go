@@ -85,6 +85,7 @@ const (
 	All     GetHyDFSFilesRequestType = "all"
 	Primary GetHyDFSFilesRequestType = "primary"
 	One     GetHyDFSFilesRequestType = "one"
+	Meta    GetHyDFSFilesRequestType = "meta"
 )
 
 type GetHyDFSFilesRequest struct {

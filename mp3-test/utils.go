@@ -23,25 +23,43 @@ func GetRingId(s string) uint64 {
 	return binary.BigEndian.Uint64(sum[:8]) // take the first 8 bytes as a 64-bit number
 }
 
-func GetRingSuccessor(ringId uint64) Member {
+func GetRingSuccessor(ringId uint64, membershipList map[string]Member) Member {
 	var successor Member
 	minDiff := ^uint64(0) // max uint64
 
-	MembershipList.Range(func(_, v any) bool {
-		m := v.(Member)
+	for _, m := range membershipList {
 		if m.Status != Alive || m.RingID == ringId {
-			return true
+			continue
 		}
 
-		diff := m.RingID - ringId // wraps automatically for uint64
+		diff := m.RingID - ringId // unsigned wraparound handles ring
 		if diff < minDiff {
 			minDiff = diff
 			successor = m
 		}
-		return true
-	})
+	}
 
 	return successor
+}
+
+func GetRingPredecessor(ringId uint64, membershipList map[string]Member) Member {
+	var predecessor Member
+	minDiff := ^uint64(0) // max uint64
+
+	for _, m := range membershipList {
+		if m.Status != Alive || m.RingID == ringId {
+			continue
+		}
+
+		// distance going *backwards* around the ring
+		diff := ringId - m.RingID // wraps automatically for uint64
+		if diff < minDiff {
+			minDiff = diff
+			predecessor = m
+		}
+	}
+
+	return predecessor
 }
 
 func SnapshotMembers(omitFailed bool) map[string]Member {

@@ -160,6 +160,7 @@ func gossip(interval time.Duration) {
 				m.LastUpdated = Tick
 				MembershipList.Store(k.(string), m)
 				// fmt.Printf("[FAIL] %s marked failed at tick %d\n", k.(string), tick)
+				handleNodeFail(m, SnapshotMembers(true))
 			} else if m.Status == Failed && elapsed >= Tcleanup {
 				MembershipList.Delete(k.(string))
 				// fmt.Printf("[DELETE] %s removed from membership list at tick %d\n", k.(string), tick)
@@ -237,7 +238,7 @@ func handleMessage(msg *Message, encoder *json.Encoder) { // encoder can only be
 		mergeMembershipList(gp.Members)
 
 		// Get all files from successor
-		target := GetRingSuccessor(GetRingId(selfId))
+		target := GetRingSuccessor(GetRingId(selfId), SnapshotMembers(true))
 		files, err := getFilesFromTarget(target, "", All)
 		if err != nil {
 			fmt.Printf("get files from target error: %v", err)
@@ -393,7 +394,8 @@ func handleMessage(msg *Message, encoder *json.Encoder) { // encoder can only be
 			return
 		}
 
-		if ghfr.RequestType == All {
+		switch ghfr.RequestType {
+		case All:
 			allFiles := make(map[string]HyDFSFile)
 			HyDFSFiles.Range(func(k, v any) bool {
 				filename := k.(string)
@@ -430,7 +432,8 @@ func handleMessage(msg *Message, encoder *json.Encoder) { // encoder can only be
 				From:        &self,
 				Payload:     payloadBytes,
 			})
-		} else if ghfr.RequestType == One {
+
+		case One:
 			filename := ghfr.Filename
 			w, ok := HyDFSFiles.Load(filename)
 			if !ok {
@@ -482,10 +485,11 @@ func handleMessage(msg *Message, encoder *json.Encoder) { // encoder can only be
 func createOrAppendHyDFSFile(localfilename string, hyDFSfilename string, create bool) bool {
 	// Writes to a quorum of 3 replicas
 	targets := make([]Member, 0, 3)
+	membershipList := SnapshotMembers(true)
 
-	targets = append(targets, GetRingSuccessor(GetRingId(hyDFSfilename)))
-	targets = append(targets, GetRingSuccessor(GetRingId(KeyFor(targets[0]))))
-	targets = append(targets, GetRingSuccessor(GetRingId(KeyFor(targets[1]))))
+	targets = append(targets, GetRingSuccessor(GetRingId(hyDFSfilename), membershipList))
+	targets = append(targets, GetRingSuccessor(GetRingId(KeyFor(targets[0])), membershipList))
+	targets = append(targets, GetRingSuccessor(GetRingId(KeyFor(targets[1])), membershipList))
 
 	fileContent, err := EncodeFileToBase64(localfilename)
 	if err != nil {
@@ -584,10 +588,11 @@ func createOrAppendHyDFSFile(localfilename string, hyDFSfilename string, create 
 func getHyDFSFile(hyDFSfilename string, localfilename string) bool {
 	// Read, but read quorum is just 1
 	targets := make([]Member, 0, 3)
+	membershipList := SnapshotMembers(true)
 
-	targets = append(targets, GetRingSuccessor(GetRingId(hyDFSfilename)))
-	targets = append(targets, GetRingSuccessor(GetRingId(KeyFor(targets[0]))))
-	targets = append(targets, GetRingSuccessor(GetRingId(KeyFor(targets[1]))))
+	targets = append(targets, GetRingSuccessor(GetRingId(hyDFSfilename), membershipList))
+	targets = append(targets, GetRingSuccessor(GetRingId(KeyFor(targets[0])), membershipList))
+	targets = append(targets, GetRingSuccessor(GetRingId(KeyFor(targets[1])), membershipList))
 
 	v, _ := MembershipList.Load(selfId)
 	self := v.(Member)
@@ -678,6 +683,16 @@ func getFilesFromTarget(target Member, hyDFSfilename string, requestType GetHyDF
 	}
 
 	return ghfr.HyDFSFiles, nil
+}
+
+func handleNodeFail(m Member, membershipList map[string]Member) {
+	// take responsibilty for member if you are a successor or successor's successor (3 replicas)
+	successor := GetRingSuccessor(GetRingId(KeyFor(m)), membershipList)
+	successor2 := GetRingSuccessor(GetRingId(KeyFor(successor)), membershipList)
+	if KeyFor(successor) != selfId && KeyFor(successor2) != selfId {
+		return
+	}
+
 }
 
 func main() {

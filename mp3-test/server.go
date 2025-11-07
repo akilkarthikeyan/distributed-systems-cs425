@@ -236,6 +236,40 @@ func handleMessage(msg *Message, encoder *json.Encoder) { // encoder can only be
 		}
 		mergeMembershipList(gp.Members)
 
+		// Get all files from successor
+		target := GetRingSuccessor(GetRingId(selfId))
+		files, err := getFilesFromTarget(target, "", true)
+		if err != nil {
+			fmt.Printf("get files from target error: %v", err)
+			return
+		}
+
+		for filename, hyDFSFile := range files {
+			chunks := make([]File, 0)
+			for _, chunk := range hyDFSFile.Chunks {
+				data, err := DecodeBase64ToBytes(chunk.DataB64)
+				if err != nil {
+					fmt.Printf("file decode error: %v", err)
+					return
+				}
+				targetPath := filepath.Join("hydfs", GetHyDFSCompliantFilename(filename)+"_"+chunk.ID)
+				if err := os.WriteFile(targetPath, data, 0644); err != nil {
+					fmt.Printf("failed to write file: %v\n", err)
+					return
+				}
+				chunks = append(chunks, File{
+					Filename: filename,
+					ID:       chunk.ID,
+				})
+			}
+
+			HyDFSFiles.Store(filename, HyDFSFile{
+				Filename:               filename,
+				HyDFSCompliantFilename: GetHyDFSCompliantFilename(filename),
+				Chunks:                 chunks,
+			})
+		}
+
 	// TCP message
 	case CreateHyDFSFile: // Returns ACK, or NACK if file already exists
 		v, _ := MembershipList.Load(selfId)
@@ -360,20 +394,42 @@ func handleMessage(msg *Message, encoder *json.Encoder) { // encoder can only be
 		}
 
 		if ghfr.All {
-			// allFiles := make(map[string]HyDFSFile)
-			// HyDFSFiles.Range(func(k, v any) bool {
-			// 	allFiles[k.(string)] = v.(HyDFSFile)
-			// 	for i, chunk := range v.(HyDFSFile).Chunks {
-			// 		targetPath := filepath.Join("hydfs", GetHyDFSCompliantFilename(chunk.Filename)+"_"+chunk.ID)
-			// 		data, err := EncodeFileToBase64(targetPath)
-			// 		if err != nil {
-			// 			fmt.Printf("file encode error: %v", err)
-			// 			return false
-			// 		}
-			// 		allFiles[k.(string)].Chunks[i].DataB64 = data
-			// 	}
-			// 	return true
-			// })
+			allFiles := make(map[string]HyDFSFile)
+			HyDFSFiles.Range(func(k, v any) bool {
+				filename := k.(string)
+				hyDFSFile := v.(HyDFSFile)
+
+				chunks := make([]File, 0)
+				for _, chunk := range hyDFSFile.Chunks {
+					targetPath := filepath.Join("hydfs", GetHyDFSCompliantFilename(chunk.Filename)+"_"+chunk.ID)
+					data, err := EncodeFileToBase64(targetPath)
+					if err != nil {
+						fmt.Printf("file encode error: %v", err)
+						return false
+					}
+					chunks = append(chunks, File{
+						Filename: chunk.Filename,
+						DataB64:  data,
+						ID:       chunk.ID,
+					})
+				}
+
+				allFiles[filename] = HyDFSFile{
+					Filename: filename,
+					Chunks:   chunks,
+				}
+				return true
+			})
+
+			payloadBytes, _ := json.Marshal(GetHyDFSFilesResponse{
+				Ack:        ACK,
+				HyDFSFiles: allFiles,
+			})
+			encoder.Encode(&Message{
+				MessageType: GetHyDFSFiles,
+				From:        &self,
+				Payload:     payloadBytes,
+			})
 		} else {
 			filename := ghfr.Filename
 			w, ok := HyDFSFiles.Load(filename)
@@ -596,7 +652,33 @@ func getHyDFSFile(hyDFSfilename string, localfilename string) bool {
 	return false
 }
 
-// func getHyDFSFileFromTarget(target Member, hyDFSfilename string) (, error) {
+func getFilesFromTarget(target Member, hyDFSfilename string, all bool) (map[string]HyDFSFile, error) {
+	v, _ := MembershipList.Load(selfId)
+	self := v.(Member)
+
+	payloadBytes, _ := json.Marshal(GetHyDFSFilesRequest{
+		Filename: hyDFSfilename,
+		All:      all,
+	})
+	req := Message{
+		MessageType: GetHyDFSFiles,
+		From:        &self,
+		Payload:     payloadBytes,
+	}
+
+	addr := fmt.Sprintf("%s:%d", target.IP, target.Port)
+	resp, err := sendTCP(addr, &req)
+	if err != nil {
+		return nil, err
+	}
+
+	var ghfr GetHyDFSFilesResponse
+	if err := json.Unmarshal(resp.Payload, &ghfr); err != nil {
+		return nil, err
+	}
+
+	return ghfr.HyDFSFiles, nil
+}
 
 func main() {
 	f, err := os.OpenFile("machine.log", os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)

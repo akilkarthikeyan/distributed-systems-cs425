@@ -20,7 +20,7 @@ const (
 	JoinReply       MessageType = "join-reply"
 	CreateHyDFSFile MessageType = "create-hydfs-file"
 	AppendHyDFSFile MessageType = "append-hydfs-file"
-	GetHyDFSFile    MessageType = "get-hydfs-file"
+	GetHyDFSFiles   MessageType = "get-hydfs-file"
 )
 
 type ACKType string
@@ -51,15 +51,42 @@ type GossipPayload struct {
 	Members map[string]Member `json:"Members"`
 }
 
-type GetHyDFSFilePayload struct {
-	Ack          ACKType       `json:"ack"`
-	FilePayloads []FilePayload `json:"filePayloads,omitempty"`
-}
-
-type FilePayload struct {
+type File struct {
 	Filename string `json:"filename"`
 	DataB64  string `json:"dataB64"`
 	ID       string `json:"id"` // chunk ID
+}
+
+type HyDFSFile struct {
+	Filename               string
+	HyDFSCompliantFilename string // without slashes
+	Chunks                 []File // will contain DataB64 only during transport
+}
+
+type CreateHyDFSFileRequest struct {
+	Chunk File `json:"file"`
+}
+
+type CreateHyDFSFileResponse struct {
+	Ack ACKType `json:"ack"`
+}
+
+type AppendHyDFSFileRequest struct {
+	Chunk File `json:"file"`
+}
+
+type AppendHyDFSFileResponse struct {
+	Ack ACKType `json:"ack"`
+}
+
+type GetHyDFSFilesRequest struct {
+	Filename string `json:"filename"`
+	All      bool   `json:"all"` // if true, get all files
+}
+
+type GetHyDFSFilesResponse struct {
+	Ack        ACKType              `json:"ack"`
+	HyDFSFiles map[string]HyDFSFile `json:"hyDFSFiles,omitempty"`
 }
 
 const (
@@ -71,9 +98,3 @@ const (
 	K              = 3
 	TimeUnit       = time.Second * 5
 )
-
-type HyDFSFile struct {
-	Filename               string
-	HyDFSCompliantFilename string        // without slashes
-	Chunks                 []FilePayload // will contain DataB64 only during transport
-}

@@ -919,7 +919,7 @@ func merge(hyDFSFile string, membershipList map[string]Member, mergeType MergeTy
 				myCopy := v.(HyDFSFile)
 				myCopy.Chunks = primaryCopy.Chunks
 				HyDFSFiles.Store(filename, myCopy)
-			} else {
+			} else if KeyFor(GetRingSuccessor(GetRingId(filename), membershipList)) != selfId {
 				// delete this file from local file system and HyDFSFiles
 				myCopy := v.(HyDFSFile)
 				for _, chunk := range myCopy.Chunks {

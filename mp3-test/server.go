@@ -1195,6 +1195,30 @@ func handleCommand(line string) {
 
 		fmt.Printf("Merge for %s initiated!\n", hyDFSfilename)
 
+	case "ls":
+		if len(fields) != 2 {
+			fmt.Println("Usage: ls <HyDFSfilename>")
+		}
+		hyDFSfilename := fields[1]
+		membershipList := SnapshotMembers(true)
+		isPresent := false
+
+		for id, target := range membershipList {
+			hyDFSFiles, err := getFilesFromTarget(target, hyDFSfilename, Meta)
+			if err != nil {
+				continue
+			}
+			if _, ok := hyDFSFiles[hyDFSfilename]; ok {
+				isPresent = true
+				fmt.Printf("RingID: %20d | ID: %s\n", GetRingId(id), id)
+			}
+		}
+		if !isPresent {
+			fmt.Printf("File %s not found in HyDFS\n", hyDFSfilename)
+		} else {
+			fmt.Printf("\nFile's RingID: %20d\n", GetRingId(hyDFSfilename))
+		}
+
 	default:
 		fmt.Println("Unknown command:", line)
 	}

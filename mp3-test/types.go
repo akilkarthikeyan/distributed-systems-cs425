@@ -88,6 +88,13 @@ const (
 	Meta    GetHyDFSFilesRequestType = "meta"
 )
 
+type MergeType string
+
+const (
+	MergeAll MergeType = "All"
+	MergeOne MergeType = "One"
+)
+
 type GetHyDFSFilesRequest struct {
 	Filename    string                   `json:"filename"`
 	RequestType GetHyDFSFilesRequestType `json:"requestType"`
@@ -104,6 +111,7 @@ const (
 	IntroducerPort = 1234
 	Tfail          = 5
 	Tcleanup       = 5
+	Tmerge         = 30
 	K              = 3
-	TimeUnit       = time.Second * 5
+	TimeUnit       = time.Second
 )

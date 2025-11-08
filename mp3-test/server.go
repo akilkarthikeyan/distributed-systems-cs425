@@ -140,6 +140,9 @@ func gossip(interval time.Duration) {
 
 	for range ticker.C {
 		Tick++
+		if (Tick % Tmerge) == 0 {
+			go merge("", SnapshotMembers(true), MergeAll)
+		}
 
 		// Increment self heartbeat
 		v, _ := MembershipList.Load(selfId)
@@ -521,6 +524,23 @@ func handleMessage(msg *Message, encoder *json.Encoder) { // encoder can only be
 				From:        &self,
 				Payload:     payloadBytes,
 			})
+
+		case Meta:
+			metaFiles := make(map[string]HyDFSFile)
+			HyDFSFiles.Range(func(k, v any) bool {
+				metaFiles[k.(string)] = v.(HyDFSFile)
+				return true
+			})
+
+			payloadBytes, _ := json.Marshal(GetHyDFSFilesResponse{
+				Ack:        ACK,
+				HyDFSFiles: metaFiles,
+			})
+			encoder.Encode(&Message{
+				MessageType: GetHyDFSFiles,
+				From:        &self,
+				Payload:     payloadBytes,
+			})
 		}
 	}
 }
@@ -848,6 +868,84 @@ func handleNodeFail(m Member, membershipList map[string]Member) {
 
 	} else {
 		return
+	}
+}
+
+// ensures order of chunks is the same as primary
+func merge(hyDFSFile string, membershipList map[string]Member, mergeType MergeType) {
+	predecessor := GetRingPredecessor(GetRingId(selfId), membershipList)
+	predecessor2 := GetRingPredecessor(GetRingId(KeyFor(predecessor)), membershipList)
+
+	metaFiles, err := getFilesFromTarget(predecessor2, "", Meta)
+	if err != nil {
+		fmt.Printf("get files from target error: %v", err)
+		return
+	}
+	metaFiles2, err := getFilesFromTarget(predecessor, "", Meta)
+	if err != nil {
+		fmt.Printf("get files from target error: %v", err)
+		return
+	}
+
+	// delete non-primary files
+	for filename := range metaFiles {
+		if KeyFor(GetRingSuccessor(GetRingId(filename), membershipList)) != KeyFor(predecessor) {
+			delete(metaFiles, filename)
+		}
+	}
+	for filename := range metaFiles2 {
+		if KeyFor(GetRingSuccessor(GetRingId(filename), membershipList)) != KeyFor(predecessor2) {
+			delete(metaFiles2, filename)
+		}
+	}
+
+	switch mergeType {
+	case MergeAll:
+		HyDFSFiles.Range(func(k, v any) bool {
+			filename := k.(string)
+			if KeyFor(GetRingSuccessor(GetRingId(filename), membershipList)) == KeyFor(predecessor) {
+				primaryCopy, ok := metaFiles[filename]
+				if !ok {
+					return true
+				}
+				myCopy := v.(HyDFSFile)
+				myCopy.Chunks = primaryCopy.Chunks
+				HyDFSFiles.Store(filename, myCopy)
+			} else if KeyFor(GetRingSuccessor(GetRingId(filename), membershipList)) == KeyFor(predecessor2) {
+				primaryCopy, ok := metaFiles2[filename]
+				if !ok {
+					return true
+				}
+				myCopy := v.(HyDFSFile)
+				myCopy.Chunks = primaryCopy.Chunks
+				HyDFSFiles.Store(filename, myCopy)
+			} else {
+				// delete this file from local file system and HyDFSFiles
+				myCopy := v.(HyDFSFile)
+				for _, chunk := range myCopy.Chunks {
+					targetPath := filepath.Join("hydfs", GetHyDFSCompliantFilename(chunk.Filename)+"_"+chunk.ID)
+					os.Remove(targetPath)
+				}
+				HyDFSFiles.Delete(filename)
+			}
+			return true
+		})
+
+	case MergeOne:
+		v, ok := HyDFSFiles.Load(hyDFSFile)
+		if !ok {
+			return
+		}
+		primaryCopy, ok := metaFiles[hyDFSFile]
+		if !ok {
+			primaryCopy, ok = metaFiles2[hyDFSFile]
+			if !ok {
+				return
+			}
+		}
+		myCopy := v.(HyDFSFile)
+		myCopy.Chunks = primaryCopy.Chunks
+		HyDFSFiles.Store(hyDFSFile, myCopy)
 	}
 }
 

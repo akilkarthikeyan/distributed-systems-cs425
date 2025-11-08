@@ -239,9 +239,10 @@ func handleMessage(msg *Message, encoder *json.Encoder) { // encoder can only be
 			return
 		}
 		mergeMembershipList(gp.Members)
+		membershipList := SnapshotMembers(true)
 
 		// Get all files from successor
-		target := GetRingSuccessor(GetRingId(selfId), SnapshotMembers(true))
+		target := GetRingSuccessor(GetRingId(selfId), membershipList)
 		files, err := getFilesFromTarget(target, "", All)
 		if err != nil {
 			fmt.Printf("get files from target error: %v", err)
@@ -249,6 +250,10 @@ func handleMessage(msg *Message, encoder *json.Encoder) { // encoder can only be
 		}
 
 		for filename, hyDFSFile := range files {
+			// If successor is primary for file, skip copying it
+			if KeyFor(GetRingSuccessor(GetRingId(filename), membershipList)) == KeyFor(target) {
+				continue
+			}
 			chunks := make([]File, 0)
 			for _, chunk := range hyDFSFile.Chunks {
 				data, err := DecodeBase64ToBytes(chunk.DataB64)

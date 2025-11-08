@@ -755,9 +755,11 @@ func getFilesFromTarget(target Member, hyDFSfilename string, requestType GetHyDF
 
 // redistributes replicas
 func handleNodeFail(m Member, membershipList map[string]Member) {
-	// take responsibilty for member if you are a successor or successor's successor (3 replicas)
+	// take responsibilty for replicas that failed node replicated if you are a successor or 2nd successor
+	// take responsibilty for replicas that failed node was primary for if you are 3rd successor (first 2 successors already replicate it)
 	successor := GetRingSuccessor(GetRingId(KeyFor(m)), membershipList)
 	successor2 := GetRingSuccessor(GetRingId(KeyFor(successor)), membershipList)
+	successor3 := GetRingSuccessor(GetRingId(KeyFor(successor2)), membershipList)
 	predecessor := GetRingPredecessor(GetRingId(selfId), membershipList)
 	predecessor2 := GetRingPredecessor(GetRingId(KeyFor(predecessor)), membershipList)
 
@@ -871,6 +873,47 @@ func handleNodeFail(m Member, membershipList map[string]Member) {
 			})
 		}
 
+	} else if KeyFor(successor3) == selfId {
+		// get all files from successor
+		files, err := getFilesFromTarget(successor, "", All)
+		if err != nil {
+			fmt.Printf("get files from target error: %v", err)
+			return
+		}
+
+		for filename, hyDFSFile := range files {
+			// If successor is not primary for file, skip copying it
+			if KeyFor(GetRingSuccessor(GetRingId(filename), membershipList)) != KeyFor(successor) {
+				continue
+			}
+			_, ok := HyDFSFiles.Load(filename)
+			// skip if already have it
+			if ok {
+				continue
+			}
+			chunks := make([]File, 0)
+			for _, chunk := range hyDFSFile.Chunks {
+				data, err := DecodeBase64ToBytes(chunk.DataB64)
+				if err != nil {
+					fmt.Printf("file decode error: %v", err)
+					return
+				}
+				targetPath := filepath.Join("hydfs", GetHyDFSCompliantFilename(filename)+"_"+chunk.ID)
+				if err := os.WriteFile(targetPath, data, 0644); err != nil {
+					fmt.Printf("failed to write file: %v\n", err)
+					return
+				}
+				chunks = append(chunks, File{
+					Filename: filename,
+					ID:       chunk.ID,
+				})
+			}
+			HyDFSFiles.Store(filename, HyDFSFile{
+				Filename:               filename,
+				HyDFSCompliantFilename: GetHyDFSCompliantFilename(filename),
+				Chunks:                 chunks,
+			})
+		}
 	} else {
 		return
 	}

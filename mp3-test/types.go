@@ -21,6 +21,7 @@ const (
 	CreateHyDFSFile MessageType = "create-hydfs-file"
 	AppendHyDFSFile MessageType = "append-hydfs-file"
 	GetHyDFSFiles   MessageType = "get-hydfs-file"
+	Merge           MessageType = "merge"
 )
 
 type ACKType string
@@ -61,6 +62,11 @@ type HyDFSFile struct {
 	Filename               string
 	HyDFSCompliantFilename string // without slashes
 	Chunks                 []File // will contain DataB64 only during transport
+}
+
+type MergeRequest struct {
+	HyDFSFilename string    `json:"hyDFSFilename"`
+	MergeType     MergeType `json:"mergeType"`
 }
 
 type CreateHyDFSFileRequest struct {

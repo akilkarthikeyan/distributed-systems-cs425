@@ -279,6 +279,15 @@ func handleMessage(msg *Message, encoder *json.Encoder) { // encoder can only be
 			})
 		}
 
+	// UDP message
+	case Merge:
+		var mr MergeRequest
+		if err := json.Unmarshal(msg.Payload, &mr); err != nil {
+			fmt.Printf("merge request unmarshal error: %v", err)
+			return
+		}
+		merge(mr.HyDFSFilename, SnapshotMembers(true), mr.MergeType)
+
 	// TCP message
 	case CreateHyDFSFile: // Returns ACK, or NACK if file already exists
 		v, _ := MembershipList.Load(selfId)
@@ -392,7 +401,7 @@ func handleMessage(msg *Message, encoder *json.Encoder) { // encoder can only be
 		})
 
 	// TCP message
-	case GetHyDFSFiles: // Returns file payloads if file exists, else NACK; If "All", returns all files with an ACK, If "Primary", returns primary files only
+	case GetHyDFSFiles: // Returns file payloads if file exists, else NACK; If "All", returns all files with an ACK, If "Primary", returns primary files only, If "Meta", returns metadata only
 		v, _ := MembershipList.Load(selfId)
 		self := v.(Member)
 
@@ -547,6 +556,20 @@ func handleMessage(msg *Message, encoder *json.Encoder) { // encoder can only be
 				Payload:     payloadBytes,
 			})
 		}
+	}
+}
+
+func multicastMessage(msg *Message, members map[string]Member) {
+	for _, target := range members {
+		if KeyFor(target) == selfId {
+			continue
+		}
+		targetAddr, err := net.ResolveUDPAddr("udp", fmt.Sprintf("%s:%d", target.IP, target.Port))
+		if err != nil {
+			fmt.Printf("multicast resolve target error: %v", err)
+			continue
+		}
+		sendUDP(targetAddr, msg)
 	}
 }
 
@@ -1148,6 +1171,29 @@ func handleCommand(line string) {
 		} else {
 			fmt.Printf("Failed to retrieve HyDFS file\n")
 		}
+
+	case "merge":
+		if len(fields) != 2 {
+			fmt.Println("Usage: merge <HyDFSfilename>")
+		}
+		hyDFSfilename := fields[1]
+		membershipList := SnapshotMembers(true)
+		merge(hyDFSfilename, membershipList, MergeOne)
+
+		v, _ := MembershipList.Load(selfId)
+		self := v.(Member)
+		payloadBytes, _ := json.Marshal(MergeRequest{
+			HyDFSFilename: hyDFSfilename,
+			MergeType:     MergeOne,
+		})
+		msg := Message{
+			MessageType: Merge,
+			From:        &self,
+			Payload:     payloadBytes,
+		}
+		multicastMessage(&msg, membershipList)
+
+		fmt.Printf("Merge for %s initiated!\n", hyDFSfilename)
 
 	default:
 		fmt.Println("Unknown command:", line)

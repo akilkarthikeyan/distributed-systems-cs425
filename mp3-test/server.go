@@ -1340,6 +1340,7 @@ func handleCommand(line string) {
 
 			sendUDP(targetAddr, &msg)
 		}
+		fmt.Printf("Multiappend for %s initiated!\n", hyDFSfilename)
 
 	default:
 		fmt.Println("Unknown command:", line)

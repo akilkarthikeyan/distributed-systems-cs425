@@ -37,7 +37,7 @@ var (
 )
 
 func initBWLogger(path string) (*os.File, error) {
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
 	if err != nil {
 		return nil, err
 	}
@@ -46,7 +46,7 @@ func initBWLogger(path string) (*os.File, error) {
 }
 
 func initRRLogger(path string) (*os.File, error) {
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
 	if err != nil {
 		return nil, err
 	}
@@ -834,6 +834,7 @@ func getFilesFromTarget(target Member, hyDFSfilename string, requestType GetHyDF
 
 // Redistributes replicas
 func handleNodeFail(m Member, membershipList map[string]Member) {
+	bwLog.Printf("-------- NODE FAIL HANDLING STARTED -------- %s\n", KeyFor(m))
 	start := time.Now() // Start timing
 	// Take responsibilty for replicas that failed node replicated if you are a successor or 2nd successor
 	// Take responsibilty for replicas that failed node was primary for if you are 3rd successor (first 2 successors already replicate it)
@@ -1553,21 +1554,25 @@ func reportTCPBandwidth(interval time.Duration, l *log.Logger) {
 	defer ticker.Stop()
 
 	var lastTx, lastRx int64
+	lastT := time.Now()
+
 	for range ticker.C {
+		now := time.Now()
+		elapsed := now.Sub(lastT).Seconds()
+		lastT = now
+
 		tx := tcpBytesTx.Load()
 		rx := tcpBytesRx.Load()
-
 		dTx := tx - lastTx
 		dRx := rx - lastRx
 		lastTx, lastRx = tx, rx
 
-		sec := interval.Seconds()
-		const MiB = 1024.0 * 1024.0
-		bwTx := float64(dTx) / MiB / sec
-		bwRx := float64(dRx) / MiB / sec
-		bwTotal := bwTx + bwRx // total bandwidth (both directions)
+		const KiB = 1024.0
+		bwTx := float64(dTx) / KiB / elapsed
+		bwRx := float64(dRx) / KiB / elapsed
+		bwTotal := bwTx + bwRx
 
-		l.Printf("[TCP-BW] tx=%.2f MiB/s rx=%.2f MiB/s total=%.2f MiB/s",
-			bwTx, bwRx, bwTotal)
+		l.Printf("[TCP-BW] tx=%.2f KiB/s rx=%.2f KiB/s total=%.2f KiB/s | Δtx=%dB Δrx=%dB",
+			bwTx, bwRx, bwTotal, dTx, dRx)
 	}
 }

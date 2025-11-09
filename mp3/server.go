@@ -360,7 +360,7 @@ func handleMessage(msg *Message, encoder *json.Encoder) { // encoder can only be
 		})
 
 		// For the demo
-		fmt.Printf("AppendHyDFSFile operation for %s complete!\n", f.Filename)
+		fmt.Printf("CreateHyDFSFile operation for %s complete!\n", f.Filename)
 
 	// TCP message
 	case AppendHyDFSFile: // Returns ACK, or NACK if file does not exist

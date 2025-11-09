@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -1218,6 +1219,63 @@ func handleCommand(line string) {
 		} else {
 			fmt.Printf("\nFile's RingID: %20d\n", GetRingId(hyDFSfilename))
 		}
+
+	case "liststore":
+		HyDFSFiles.Range(func(k, v any) bool {
+			filename := k.(string)
+			fmt.Printf("Filename: %s | RingID: %20d", filename, GetRingId(filename))
+			return true
+		})
+
+	case "getfromreplica":
+		if len(fields) != 4 {
+			fmt.Println("Usage: getfromreplica <VMaddress> <HyDFSFilename> <localfilename>")
+		}
+		targetAddr := fields[1]
+		targetIP, targetPortStr, err := net.SplitHostPort(targetAddr)
+		if err != nil {
+			fmt.Printf("invalid target address: %v\n", err)
+			return
+		}
+		targetPort, err := strconv.Atoi(targetPortStr)
+		if err != nil {
+			fmt.Printf("invalid target port: %v\n", err)
+			return
+		}
+		hyDFSfilename := fields[2]
+		localfilename := fields[3]
+
+		target := Member{
+			IP:   targetIP,
+			Port: targetPort,
+		}
+
+		files, err := getFilesFromTarget(target, hyDFSfilename, One)
+		if err != nil {
+			fmt.Printf("get files from target error: %v", err)
+			return
+		}
+
+		hyDFSFile, ok := files[hyDFSfilename]
+		if !ok {
+			fmt.Printf("file %s not found on replica %s\n", hyDFSfilename, targetAddr)
+			return
+		}
+		var full []byte
+		for _, fp := range hyDFSFile.Chunks {
+			data, err := DecodeBase64ToBytes(fp.DataB64)
+			if err != nil {
+				fmt.Printf("file decode error: %v", err)
+				return
+			}
+			full = append(full, data...)
+		}
+
+		if err := os.WriteFile(localfilename, full, 0644); err != nil {
+			fmt.Printf("failed to write file: %v\n", err)
+			return
+		}
+		fmt.Printf("Retrieved HyDFS file %s from replica %s to %s!\n", hyDFSfilename, targetAddr, localfilename)
 
 	default:
 		fmt.Println("Unknown command:", line)

@@ -952,17 +952,17 @@ func handleNodeFail(m Member, membershipList map[string]Member) {
 	}
 }
 
-// ensures order of chunks is the same as primary
+// Ensures order of chunks is the same as primary, creates missing files, and deletes extraneous files
 func merge(hyDFSFile string, membershipList map[string]Member, mergeType MergeType) {
 	predecessor := GetRingPredecessor(GetRingId(selfId), membershipList)
 	predecessor2 := GetRingPredecessor(GetRingId(KeyFor(predecessor)), membershipList)
 
-	metaFiles, err := getFilesFromTarget(predecessor2, "", Meta)
+	metaFiles, err := getFilesFromTarget(predecessor, "", Meta)
 	if err != nil {
 		fmt.Printf("get files from target error: %v", err)
 		return
 	}
-	metaFiles2, err := getFilesFromTarget(predecessor, "", Meta)
+	metaFiles2, err := getFilesFromTarget(predecessor2, "", Meta)
 	if err != nil {
 		fmt.Printf("get files from target error: %v", err)
 		return
@@ -984,24 +984,16 @@ func merge(hyDFSFile string, membershipList map[string]Member, mergeType MergeTy
 	case MergeAll:
 		HyDFSFiles.Range(func(k, v any) bool {
 			filename := k.(string)
-			if KeyFor(GetRingSuccessor(GetRingId(filename), membershipList)) == KeyFor(predecessor) {
-				primaryCopy, ok := metaFiles[filename]
-				if !ok {
-					return true
-				}
+			if primaryCopy, ok := metaFiles[filename]; ok {
 				myCopy := v.(HyDFSFile)
 				myCopy.Chunks = primaryCopy.Chunks
 				HyDFSFiles.Store(filename, myCopy)
-			} else if KeyFor(GetRingSuccessor(GetRingId(filename), membershipList)) == KeyFor(predecessor2) {
-				primaryCopy, ok := metaFiles2[filename]
-				if !ok {
-					return true
-				}
+			} else if primaryCopy, ok := metaFiles2[filename]; ok {
 				myCopy := v.(HyDFSFile)
 				myCopy.Chunks = primaryCopy.Chunks
 				HyDFSFiles.Store(filename, myCopy)
 			} else if KeyFor(GetRingSuccessor(GetRingId(filename), membershipList)) != selfId {
-				// delete this file from local file system and HyDFSFiles
+				// Delete this file from local file system and HyDFSFiles
 				myCopy := v.(HyDFSFile)
 				for _, chunk := range myCopy.Chunks {
 					targetPath := filepath.Join("hydfs", GetHyDFSCompliantFilename(chunk.Filename)+"_"+chunk.ID)
@@ -1011,22 +1003,133 @@ func merge(hyDFSFile string, membershipList map[string]Member, mergeType MergeTy
 			}
 			return true
 		})
+		// Get any missing primary files
+		for filename := range metaFiles {
+			_, ok := HyDFSFiles.Load(filename)
+			if ok {
+				continue
+			}
+			hyDFSFiles, err := getFilesFromTarget(predecessor, filename, One)
+			if err != nil {
+				fmt.Printf("get files from target error: %v", err)
+				return
+			}
+			hyDFSFile := hyDFSFiles[filename]
+			chunks := make([]File, 0)
+			for _, chunk := range hyDFSFile.Chunks {
+				data, err := DecodeBase64ToBytes(chunk.DataB64)
+				if err != nil {
+					fmt.Printf("file decode error: %v", err)
+					return
+				}
+				targetPath := filepath.Join("hydfs", GetHyDFSCompliantFilename(filename)+"_"+chunk.ID)
+				if err := os.WriteFile(targetPath, data, 0644); err != nil {
+					fmt.Printf("failed to write file: %v\n", err)
+					return
+				}
+				chunks = append(chunks, File{
+					Filename: filename,
+					ID:       chunk.ID,
+				})
+			}
+			HyDFSFiles.Store(filename, HyDFSFile{
+				Filename:               filename,
+				HyDFSCompliantFilename: GetHyDFSCompliantFilename(filename),
+				Chunks:                 chunks,
+			})
+		}
+		for filename := range metaFiles2 {
+			_, ok := HyDFSFiles.Load(filename)
+			if ok {
+				continue
+			}
+			hyDFSFiles, err := getFilesFromTarget(predecessor2, filename, One)
+			if err != nil {
+				fmt.Printf("get files from target error: %v", err)
+				return
+			}
+			hyDFSFile := hyDFSFiles[filename]
+			chunks := make([]File, 0)
+			for _, chunk := range hyDFSFile.Chunks {
+				data, err := DecodeBase64ToBytes(chunk.DataB64)
+				if err != nil {
+					fmt.Printf("file decode error: %v", err)
+					return
+				}
+				targetPath := filepath.Join("hydfs", GetHyDFSCompliantFilename(filename)+"_"+chunk.ID)
+				if err := os.WriteFile(targetPath, data, 0644); err != nil {
+					fmt.Printf("failed to write file: %v\n", err)
+					return
+				}
+				chunks = append(chunks, File{
+					Filename: filename,
+					ID:       chunk.ID,
+				})
+			}
+			HyDFSFiles.Store(filename, HyDFSFile{
+				Filename:               filename,
+				HyDFSCompliantFilename: GetHyDFSCompliantFilename(filename),
+				Chunks:                 chunks,
+			})
+		}
 
 	case MergeOne:
-		v, ok := HyDFSFiles.Load(hyDFSFile)
-		if !ok {
-			return
-		}
+		inMeta := true
 		primaryCopy, ok := metaFiles[hyDFSFile]
 		if !ok {
 			primaryCopy, ok = metaFiles2[hyDFSFile]
 			if !ok {
 				return
 			}
+			inMeta = false
 		}
-		myCopy := v.(HyDFSFile)
-		myCopy.Chunks = primaryCopy.Chunks
-		HyDFSFiles.Store(hyDFSFile, myCopy)
+		v, ok := HyDFSFiles.Load(hyDFSFile)
+		if !ok {
+			var (
+				hyDFSFiles map[string]HyDFSFile
+				err        error
+			)
+			if inMeta {
+				hyDFSFiles, err = getFilesFromTarget(predecessor, hyDFSFile, One)
+				if err != nil {
+					fmt.Printf("get files from target error: %v", err)
+					return
+				}
+			} else {
+				hyDFSFiles, err = getFilesFromTarget(predecessor2, hyDFSFile, One)
+				if err != nil {
+					fmt.Printf("get files from target error: %v", err)
+					return
+				}
+			}
+			hyDFSFile := hyDFSFiles[hyDFSFile]
+			chunks := make([]File, 0)
+			for _, chunk := range hyDFSFile.Chunks {
+				data, err := DecodeBase64ToBytes(chunk.DataB64)
+				if err != nil {
+					fmt.Printf("file decode error: %v", err)
+					return
+				}
+				targetPath := filepath.Join("hydfs", GetHyDFSCompliantFilename(hyDFSFile.Filename)+"_"+chunk.ID)
+				if err := os.WriteFile(targetPath, data, 0644); err != nil {
+					fmt.Printf("failed to write file: %v\n", err)
+					return
+				}
+				chunks = append(chunks, File{
+					Filename: hyDFSFile.Filename,
+					ID:       chunk.ID,
+				})
+			}
+			HyDFSFiles.Store(hyDFSFile.Filename, HyDFSFile{
+				Filename:               hyDFSFile.Filename,
+				HyDFSCompliantFilename: GetHyDFSCompliantFilename(hyDFSFile.Filename),
+				Chunks:                 chunks,
+			})
+		} else {
+			myCopy := v.(HyDFSFile)
+			myCopy.Chunks = primaryCopy.Chunks
+			HyDFSFiles.Store(hyDFSFile, myCopy)
+		}
 	}
 }
 

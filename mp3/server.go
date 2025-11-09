@@ -433,9 +433,6 @@ func handleMessage(msg *Message, encoder *json.Encoder) { // encoder can only be
 			return
 		}
 
-		// For the demo
-		fmt.Printf("Received GetHyDFSFiles request for %s with type %s\n", ghfr.Filename, ghfr.RequestType)
-
 		switch ghfr.RequestType {
 		case All:
 			allFiles := make(map[string]HyDFSFile)
@@ -519,6 +516,9 @@ func handleMessage(msg *Message, encoder *json.Encoder) { // encoder can only be
 			})
 
 		case One:
+			// For the demo
+			fmt.Printf("Received GetHyDFSFiles request for %s\n", ghfr.Filename)
+
 			filename := ghfr.Filename
 			w, ok := HyDFSFiles.Load(filename)
 			if !ok {

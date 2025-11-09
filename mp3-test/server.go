@@ -289,6 +289,15 @@ func handleMessage(msg *Message, encoder *json.Encoder) { // encoder can only be
 		}
 		merge(mr.HyDFSFilename, SnapshotMembers(true), mr.MergeType)
 
+	// UDP message
+	case MultiAppend:
+		var mar MultiAppendRequest
+		if err := json.Unmarshal(msg.Payload, &mar); err != nil {
+			fmt.Printf("multiappend request unmarshal error: %v", err)
+			return
+		}
+		createOrAppendHyDFSFile(mar.LocalFilename, mar.HyDFSFilename, false)
+
 	// TCP message
 	case CreateHyDFSFile: // Returns ACK, or NACK if file already exists
 		v, _ := MembershipList.Load(selfId)
@@ -1137,6 +1146,7 @@ func handleCommand(line string) {
 	case "create":
 		if len(fields) != 3 {
 			fmt.Println("Usage: create <localfilename> <HyDFSfilename>")
+			return
 		}
 		localfilename := fields[1]
 		hyDFSfilename := fields[2]
@@ -1150,6 +1160,7 @@ func handleCommand(line string) {
 	case "append":
 		if len(fields) != 3 {
 			fmt.Println("Usage: append <localfilename> <HyDFSfilename>")
+			return
 		}
 		localfilename := fields[1]
 		hyDFSfilename := fields[2]
@@ -1163,6 +1174,7 @@ func handleCommand(line string) {
 	case "get":
 		if len(fields) != 3 {
 			fmt.Println("Usage: get <HyDFSfilename> <localfilename>")
+			return
 		}
 		hyDFSfilename := fields[1]
 		localfilename := fields[2]
@@ -1176,6 +1188,7 @@ func handleCommand(line string) {
 	case "merge":
 		if len(fields) != 2 {
 			fmt.Println("Usage: merge <HyDFSfilename>")
+			return
 		}
 		hyDFSfilename := fields[1]
 		membershipList := SnapshotMembers(true)
@@ -1199,6 +1212,7 @@ func handleCommand(line string) {
 	case "ls":
 		if len(fields) != 2 {
 			fmt.Println("Usage: ls <HyDFSfilename>")
+			return
 		}
 		hyDFSfilename := fields[1]
 		membershipList := SnapshotMembers(true)
@@ -1230,6 +1244,7 @@ func handleCommand(line string) {
 	case "getfromreplica":
 		if len(fields) != 4 {
 			fmt.Println("Usage: getfromreplica <VMaddress> <HyDFSFilename> <localfilename>")
+			return
 		}
 		targetAddr := fields[1]
 		targetIP, targetPortStr, err := net.SplitHostPort(targetAddr)
@@ -1276,6 +1291,55 @@ func handleCommand(line string) {
 			return
 		}
 		fmt.Printf("Retrieved HyDFS file %s from replica %s to %s!\n", hyDFSfilename, targetAddr, localfilename)
+
+	case "multiappend":
+		if len(fields) < 4 {
+			fmt.Println("Usage: multiappend <HyDFSfilename> <VMi> <VMj> ... <localfilenamei> <localfilenamej> ...")
+			return
+		}
+
+		hyDFSfilename := fields[1]
+		v, _ := MembershipList.Load(selfId)
+		self := v.(Member)
+
+		if len(fields[2:])%2 != 0 {
+			fmt.Println("Usage: multiappend <HyDFSfilename> <VMi> <VMj> ... <localfilenamei> <localfilenamej> ...")
+			return
+		}
+		numFiles := (len(fields) - 2) / 2
+		targets := fields[2 : 2+numFiles]
+		localfilenames := fields[2+numFiles:]
+
+		for i, targetAddr := range targets {
+			targetIP, targetPortStr, err := net.SplitHostPort(targetAddr)
+			if err != nil {
+				fmt.Println("Usage: multiappend <HyDFSfilename> <VMi> <VMj> ... <localfilenamei> <localfilenamej> ...")
+				return
+			}
+			targetPort, err := strconv.Atoi(targetPortStr)
+			if err != nil {
+				fmt.Println("Usage: multiappend <HyDFSfilename> <VMi> <VMj> ... <localfilenamei> <localfilenamej> ...")
+				return
+			}
+			localfilename := localfilenames[i]
+
+			targetAddr, err := net.ResolveUDPAddr("udp", fmt.Sprintf("%s:%d", targetIP, targetPort))
+			if err != nil {
+				fmt.Printf("resolve targetAddr error: %v", err)
+				return
+			}
+			payloadBytes, _ := json.Marshal(MultiAppendRequest{
+				HyDFSFilename: hyDFSfilename,
+				LocalFilename: localfilename,
+			})
+			msg := Message{
+				MessageType: MultiAppend,
+				From:        &self,
+				Payload:     payloadBytes,
+			}
+
+			sendUDP(targetAddr, &msg)
+		}
 
 	default:
 		fmt.Println("Unknown command:", line)

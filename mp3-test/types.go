@@ -22,6 +22,7 @@ const (
 	AppendHyDFSFile MessageType = "append-hydfs-file"
 	GetHyDFSFiles   MessageType = "get-hydfs-file"
 	Merge           MessageType = "merge"
+	MultiAppend     MessageType = "multi-append"
 )
 
 type ACKType string
@@ -67,6 +68,11 @@ type HyDFSFile struct {
 type MergeRequest struct {
 	HyDFSFilename string    `json:"hyDFSFilename"`
 	MergeType     MergeType `json:"mergeType"`
+}
+
+type MultiAppendRequest struct {
+	HyDFSFilename string `json:"hyDFSFilename"`
+	LocalFilename string `json:"localFilename"`
 }
 
 type CreateHyDFSFileRequest struct {

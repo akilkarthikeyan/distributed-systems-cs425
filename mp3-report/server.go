@@ -1467,7 +1467,7 @@ func handleCommand(line string) {
 
 	case "bulkcreate":
 		if len(fields) != 2 {
-			fmt.Println("Usage: bulkappend <directory>")
+			fmt.Println("Usage: bulkcreate <directory>")
 			return
 		}
 		directory := fields[1]
@@ -1479,9 +1479,9 @@ func handleCommand(line string) {
 		for _, file := range files {
 			localfilename := filepath.Join(directory, file.Name())
 			hyDFSfilename := file.Name()
-			success := createOrAppendHyDFSFile(localfilename, hyDFSfilename, false)
+			success := createOrAppendHyDFSFile(localfilename, hyDFSfilename, true)
 			if success {
-				fmt.Printf("Appended to HyDFS file %s!\n", hyDFSfilename)
+				fmt.Printf("Created HyDFS file %s!\n", hyDFSfilename)
 			}
 		}
 

@@ -1465,6 +1465,26 @@ func handleCommand(line string) {
 		}
 		fmt.Printf("Multiappend for %s initiated!\n", hyDFSfilename)
 
+	case "bulkcreate":
+		if len(fields) != 2 {
+			fmt.Println("Usage: bulkappend <directory>")
+			return
+		}
+		directory := fields[1]
+		files, err := os.ReadDir(directory)
+		if err != nil {
+			fmt.Printf("read dir error: %v\n", err)
+			return
+		}
+		for _, file := range files {
+			localfilename := filepath.Join(directory, file.Name())
+			hyDFSfilename := file.Name()
+			success := createOrAppendHyDFSFile(localfilename, hyDFSfilename, false)
+			if success {
+				fmt.Printf("Appended to HyDFS file %s!\n", hyDFSfilename)
+			}
+		}
+
 	default:
 		fmt.Println("Unknown command:", line)
 	}

@@ -31,6 +31,29 @@ var selfId string
 
 var udpConn *net.UDPConn
 
+var (
+	bwLog *log.Logger
+	rrLog *log.Logger
+)
+
+func initBWLogger(path string) (*os.File, error) {
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	if err != nil {
+		return nil, err
+	}
+	bwLog = log.New(f, "", log.LstdFlags)
+	return f, nil
+}
+
+func initRRLogger(path string) (*os.File, error) {
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	if err != nil {
+		return nil, err
+	}
+	rrLog = log.New(f, "", log.LstdFlags)
+	return f, nil
+}
+
 func sendUDP(addr *net.UDPAddr, msg *Message) {
 	data, err := json.Marshal(msg)
 	if err != nil {
@@ -893,7 +916,9 @@ func handleNodeFail(m Member, membershipList map[string]Member) {
 			})
 		}
 		elapsed := time.Since(start)
-		fmt.Printf("[Rereplication time] handleNodeFail completed in %v\n", elapsed)
+		if rrLog != nil {
+			rrLog.Printf("[Rereplication time] completed in %v", elapsed)
+		}
 	} else if KeyFor(successor2) == selfId {
 		// Get primary files from predecessor2
 		files2, err := getFilesFromTarget(predecessor2, "", Primary)
@@ -931,7 +956,9 @@ func handleNodeFail(m Member, membershipList map[string]Member) {
 			})
 		}
 		elapsed := time.Since(start)
-		fmt.Printf("[Rereplication time] handleNodeFail completed in %v\n", elapsed)
+		if rrLog != nil {
+			rrLog.Printf("[Rereplication time] completed in %v", elapsed)
+		}
 	} else if KeyFor(successor3) == selfId {
 		// Get all files from successor
 		files, err := getFilesFromTarget(successor, "", All)
@@ -974,7 +1001,9 @@ func handleNodeFail(m Member, membershipList map[string]Member) {
 			})
 		}
 		elapsed := time.Since(start)
-		fmt.Printf("[Rereplication time] handleNodeFail completed in %v\n", elapsed)
+		if rrLog != nil {
+			rrLog.Printf("[Rereplication time] completed in %v", elapsed)
+		}
 	} else {
 		return
 	}
@@ -1170,6 +1199,21 @@ func main() {
 	defer f.Close()
 	log.SetOutput(f)
 
+	// Separate loggers
+	bwf, err := initBWLogger("tcpbw.log")
+	if err != nil {
+		fmt.Printf("bw log open error: %v", err)
+		return
+	}
+	defer bwf.Close()
+
+	rrf, err := initRRLogger("rereplication.log")
+	if err != nil {
+		fmt.Printf("rr log open error: %v", err)
+		return
+	}
+	defer rrf.Close()
+
 	// Erase previous hydfs files and make dir
 	os.RemoveAll("hydfs")
 	os.Mkdir("hydfs", 0755)
@@ -1233,7 +1277,7 @@ func main() {
 
 	go gossip(TimeUnit)
 
-	go reportTCPBandwidth(1 * time.Second)
+	go reportTCPBandwidth(1*time.Second, bwLog)
 
 	scanner := bufio.NewScanner(os.Stdin)
 	for scanner.Scan() {
@@ -1504,7 +1548,7 @@ func handleCommand(line string) {
 	}
 }
 
-func reportTCPBandwidth(interval time.Duration) {
+func reportTCPBandwidth(interval time.Duration, l *log.Logger) {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
@@ -1523,7 +1567,7 @@ func reportTCPBandwidth(interval time.Duration) {
 		bwRx := float64(dRx) / MiB / sec
 		bwTotal := bwTx + bwRx // total bandwidth (both directions)
 
-		log.Printf("[TCP-BW] tx=%.2f MiB/s rx=%.2f MiB/s total=%.2f MiB/s (this node)",
+		l.Printf("[TCP-BW] tx=%.2f MiB/s rx=%.2f MiB/s total=%.2f MiB/s",
 			bwTx, bwRx, bwTotal)
 	}
 }

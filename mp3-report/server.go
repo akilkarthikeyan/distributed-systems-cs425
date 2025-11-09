@@ -14,12 +14,17 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
 var Tick int
 var MembershipList sync.Map
 var HyDFSFiles sync.Map
+
+// Global counters
+var tcpBytesTx atomic.Int64
+var tcpBytesRx atomic.Int64
 
 var selfHost string
 var selfId string
@@ -55,10 +60,11 @@ func listenUDP() {
 }
 
 func sendTCP(addr string, msg *Message) (*Message, error) {
-	conn, err := net.Dial("tcp", addr)
+	raw, err := net.Dial("tcp", addr)
 	if err != nil {
 		return nil, err
 	}
+	conn := &countingConn{Conn: raw, rx: &tcpBytesRx, tx: &tcpBytesTx}
 	defer conn.Close()
 
 	decoder := json.NewDecoder(conn)
@@ -90,7 +96,8 @@ func listenTCP(ln net.Listener) {
 	}
 }
 
-func handleTCPClient(conn net.Conn) {
+func handleTCPClient(c net.Conn) {
+	conn := &countingConn{Conn: c, rx: &tcpBytesRx, tx: &tcpBytesTx} // wrap connection
 	defer conn.Close()
 	decoder := json.NewDecoder(conn)
 	encoder := json.NewEncoder(conn)
@@ -142,7 +149,7 @@ func gossip(interval time.Duration) {
 	for range ticker.C {
 		Tick++
 		if (Tick % Tmerge) == 0 {
-			go merge("", SnapshotMembers(true), MergeAll)
+			// go merge("", SnapshotMembers(true), MergeAll)
 		}
 
 		// Increment self heartbeat
@@ -1221,6 +1228,8 @@ func main() {
 
 	go gossip(TimeUnit)
 
+	go reportTCPBandwidth(1 * time.Second)
+
 	scanner := bufio.NewScanner(os.Stdin)
 	for scanner.Scan() {
 		line := scanner.Text()
@@ -1487,5 +1496,27 @@ func handleCommand(line string) {
 
 	default:
 		fmt.Println("Unknown command:", line)
+	}
+}
+
+func reportTCPBandwidth(interval time.Duration) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	var lastTx, lastRx int64
+	for range ticker.C {
+		tx := tcpBytesTx.Load()
+		rx := tcpBytesRx.Load()
+
+		dTx := tx - lastTx
+		dRx := rx - lastRx
+		lastTx, lastRx = tx, rx
+
+		sec := interval.Seconds()
+		const MiB = 1024.0 * 1024.0
+		bwTx := float64(dTx) / MiB / sec
+		bwRx := float64(dRx) / MiB / sec
+
+		log.Printf("[TCP-BW] tx=%.2f MiB/s rx=%.2f MiB/s (this node)", bwTx, bwRx)
 	}
 }

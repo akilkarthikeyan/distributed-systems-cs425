@@ -2,6 +2,8 @@ package main
 
 import (
 	"encoding/json"
+	"net"
+	"sync/atomic"
 	"time"
 )
 
@@ -127,3 +129,24 @@ const (
 	K              = 3
 	TimeUnit       = time.Second
 )
+
+type countingConn struct {
+	net.Conn
+	rx, tx *atomic.Int64
+}
+
+func (c *countingConn) Read(p []byte) (int, error) {
+	n, err := c.Conn.Read(p)
+	if n > 0 {
+		c.rx.Add(int64(n)) // increment received bytes
+	}
+	return n, err
+}
+
+func (c *countingConn) Write(p []byte) (int, error) {
+	n, err := c.Conn.Write(p)
+	if n > 0 {
+		c.tx.Add(int64(n)) // increment transmitted bytes
+	}
+	return n, err
+}

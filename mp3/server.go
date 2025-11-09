@@ -595,6 +595,7 @@ func createOrAppendHyDFSFile(localfilename string, hyDFSfilename string, create 
 	fileContent, err := EncodeFileToBase64(localfilename)
 	if err != nil {
 		fmt.Printf("file encode error: %v", err)
+		return false
 	}
 
 	v, _ := MembershipList.Load(selfId)
@@ -786,10 +787,10 @@ func getFilesFromTarget(target Member, hyDFSfilename string, requestType GetHyDF
 	return ghfr.HyDFSFiles, nil
 }
 
-// redistributes replicas
+// Redistributes replicas
 func handleNodeFail(m Member, membershipList map[string]Member) {
-	// take responsibilty for replicas that failed node replicated if you are a successor or 2nd successor
-	// take responsibilty for replicas that failed node was primary for if you are 3rd successor (first 2 successors already replicate it)
+	// Take responsibilty for replicas that failed node replicated if you are a successor or 2nd successor
+	// Take responsibilty for replicas that failed node was primary for if you are 3rd successor (first 2 successors already replicate it)
 	successor := GetRingSuccessor(GetRingId(KeyFor(m)), membershipList)
 	successor2 := GetRingSuccessor(GetRingId(KeyFor(successor)), membershipList)
 	successor3 := GetRingSuccessor(GetRingId(KeyFor(successor2)), membershipList)
@@ -797,7 +798,7 @@ func handleNodeFail(m Member, membershipList map[string]Member) {
 	predecessor2 := GetRingPredecessor(GetRingId(KeyFor(predecessor)), membershipList)
 
 	if KeyFor(successor) == selfId {
-		// get primary files from predecessor (this should technically already be in self)
+		// Get primary files from predecessor (this should technically already be in self)
 		files, err := getFilesFromTarget(predecessor, "", Primary)
 		if err != nil {
 			fmt.Printf("get files from target error: %v", err)
@@ -833,7 +834,7 @@ func handleNodeFail(m Member, membershipList map[string]Member) {
 			})
 		}
 
-		// get primary files from predecessor2
+		// Get primary files from predecessor2
 		files2, err := getFilesFromTarget(predecessor2, "", Primary)
 		if err != nil {
 			fmt.Printf("get files from target error: %v", err)
@@ -870,7 +871,7 @@ func handleNodeFail(m Member, membershipList map[string]Member) {
 		}
 
 	} else if KeyFor(successor2) == selfId {
-		// get primary files from predecessor2
+		// Get primary files from predecessor2
 		files2, err := getFilesFromTarget(predecessor2, "", Primary)
 		if err != nil {
 			fmt.Printf("get files from target error: %v", err)
@@ -907,7 +908,7 @@ func handleNodeFail(m Member, membershipList map[string]Member) {
 		}
 
 	} else if KeyFor(successor3) == selfId {
-		// get all files from successor
+		// Get all files from successor
 		files, err := getFilesFromTarget(successor, "", All)
 		if err != nil {
 			fmt.Printf("get files from target error: %v", err)
@@ -920,7 +921,7 @@ func handleNodeFail(m Member, membershipList map[string]Member) {
 				continue
 			}
 			_, ok := HyDFSFiles.Load(filename)
-			// skip if already have it
+			// Skip if already have it
 			if ok {
 				continue
 			}
@@ -968,7 +969,7 @@ func merge(hyDFSFile string, membershipList map[string]Member, mergeType MergeTy
 		return
 	}
 
-	// delete non-primary files
+	// Delete non-primary files
 	for filename := range metaFiles {
 		if KeyFor(GetRingSuccessor(GetRingId(filename), membershipList)) != KeyFor(predecessor) {
 			delete(metaFiles, filename)
@@ -1137,6 +1138,7 @@ func main() {
 	f, err := os.OpenFile("machine.log", os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
 	if err != nil {
 		fmt.Printf("log file open error: %v", err)
+		return
 	}
 	defer f.Close()
 	log.SetOutput(f)
@@ -1149,6 +1151,7 @@ func main() {
 	hostname, err := os.Hostname()
 	if err != nil {
 		fmt.Printf("get hostname error: %v", err)
+		return
 	}
 	selfHost = hostname
 
@@ -1168,6 +1171,7 @@ func main() {
 	listenAddr, err := net.ResolveUDPAddr("udp", fmt.Sprintf(":%d", SelfPort))
 	if err != nil {
 		fmt.Printf("resolve listenAddr error: %v", err)
+		return
 	}
 	udpConn, err = net.ListenUDP("udp", listenAddr)
 	if err != nil {
@@ -1181,6 +1185,7 @@ func main() {
 	tcpLn, err := net.Listen("tcp", fmt.Sprintf(":%d", SelfPort))
 	if err != nil {
 		fmt.Printf("tcp error: %v", err)
+		return
 	}
 
 	go listenTCP(tcpLn)

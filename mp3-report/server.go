@@ -811,6 +811,7 @@ func getFilesFromTarget(target Member, hyDFSfilename string, requestType GetHyDF
 
 // Redistributes replicas
 func handleNodeFail(m Member, membershipList map[string]Member) {
+	start := time.Now() // Start timing
 	// Take responsibilty for replicas that failed node replicated if you are a successor or 2nd successor
 	// Take responsibilty for replicas that failed node was primary for if you are 3rd successor (first 2 successors already replicate it)
 	successor := GetRingSuccessor(GetRingId(KeyFor(m)), membershipList)
@@ -891,7 +892,8 @@ func handleNodeFail(m Member, membershipList map[string]Member) {
 				Chunks:                 chunks,
 			})
 		}
-
+		elapsed := time.Since(start)
+		fmt.Printf("[Rereplication time] handleNodeFail completed in %v\n", elapsed)
 	} else if KeyFor(successor2) == selfId {
 		// Get primary files from predecessor2
 		files2, err := getFilesFromTarget(predecessor2, "", Primary)
@@ -928,7 +930,8 @@ func handleNodeFail(m Member, membershipList map[string]Member) {
 				Chunks:                 chunks,
 			})
 		}
-
+		elapsed := time.Since(start)
+		fmt.Printf("[Rereplication time] handleNodeFail completed in %v\n", elapsed)
 	} else if KeyFor(successor3) == selfId {
 		// Get all files from successor
 		files, err := getFilesFromTarget(successor, "", All)
@@ -970,6 +973,8 @@ func handleNodeFail(m Member, membershipList map[string]Member) {
 				Chunks:                 chunks,
 			})
 		}
+		elapsed := time.Since(start)
+		fmt.Printf("[Rereplication time] handleNodeFail completed in %v\n", elapsed)
 	} else {
 		return
 	}
@@ -1516,7 +1521,9 @@ func reportTCPBandwidth(interval time.Duration) {
 		const MiB = 1024.0 * 1024.0
 		bwTx := float64(dTx) / MiB / sec
 		bwRx := float64(dRx) / MiB / sec
+		bwTotal := bwTx + bwRx // total bandwidth (both directions)
 
-		log.Printf("[TCP-BW] tx=%.2f MiB/s rx=%.2f MiB/s (this node)", bwTx, bwRx)
+		log.Printf("[TCP-BW] tx=%.2f MiB/s rx=%.2f MiB/s total=%.2f MiB/s (this node)",
+			bwTx, bwRx, bwTotal)
 	}
 }

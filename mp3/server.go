@@ -309,6 +309,9 @@ func handleMessage(msg *Message, encoder *json.Encoder) { // encoder can only be
 			return
 		}
 
+		// For the demo
+		fmt.Printf("Received CreateHyDFSFile request for %s\n", chfr.Chunk.Filename)
+
 		f := chfr.Chunk
 
 		_, ok := HyDFSFiles.Load(f.Filename)
@@ -356,6 +359,9 @@ func handleMessage(msg *Message, encoder *json.Encoder) { // encoder can only be
 			Payload:     payloadBytes,
 		})
 
+		// For the demo
+		fmt.Printf("AppendHyDFSFile operation for %s complete!\n", f.Filename)
+
 	// TCP message
 	case AppendHyDFSFile: // Returns ACK, or NACK if file does not exist
 		v, _ := MembershipList.Load(selfId)
@@ -368,6 +374,9 @@ func handleMessage(msg *Message, encoder *json.Encoder) { // encoder can only be
 		}
 
 		f := ahfr.Chunk
+
+		// For the demo
+		fmt.Printf("Received AppendHyDFSFile request for %s\n", f.Filename)
 
 		w, ok := HyDFSFiles.Load(f.Filename)
 		if !ok {
@@ -410,6 +419,9 @@ func handleMessage(msg *Message, encoder *json.Encoder) { // encoder can only be
 			Payload:     payloadBytes,
 		})
 
+		// For the demo
+		fmt.Printf("AppendHyDFSFile operation for %s complete!\n", f.Filename)
+
 	// TCP message
 	case GetHyDFSFiles: // Returns file payloads if file exists, else NACK; If "All", returns all files with an ACK, If "Primary", returns primary files only, If "Meta", returns metadata only
 		v, _ := MembershipList.Load(selfId)
@@ -420,6 +432,9 @@ func handleMessage(msg *Message, encoder *json.Encoder) { // encoder can only be
 			fmt.Printf("get hydfs file payload unmarshal error: %v", err)
 			return
 		}
+
+		// For the demo
+		fmt.Printf("Received GetHyDFSFiles request for %s with type %s\n", ghfr.Filename, ghfr.RequestType)
 
 		switch ghfr.RequestType {
 		case All:

@@ -1192,11 +1192,10 @@ func merge(hyDFSFile string, membershipList map[string]Member, mergeType MergeTy
 			myCopy.Chunks = primaryCopy.Chunks
 			HyDFSFiles.Store(hyDFSFile, myCopy)
 		}
-	}
-
-	elapsed := time.Since(start)
-	if rrLog != nil {
-		rrLog.Printf("[Merge time] completed in %v", elapsed)
+		elapsed := time.Since(start)
+		if rrLog != nil {
+			rrLog.Printf("[Merge time] completed in %v", elapsed)
+		}
 	}
 }
 

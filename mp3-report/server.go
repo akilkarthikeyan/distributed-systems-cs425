@@ -272,6 +272,8 @@ func handleMessage(msg *Message, encoder *json.Encoder) { // encoder can only be
 		mergeMembershipList(gp.Members)
 		membershipList := SnapshotMembers(true)
 
+		bwLog.Printf("-------- NODE JOINED -------- %s\n", KeyFor(*msg.From))
+
 		// Get all files from successor
 		target := GetRingSuccessor(GetRingId(selfId), membershipList)
 		files, err := getFilesFromTarget(target, "", All)

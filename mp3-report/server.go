@@ -1014,6 +1014,8 @@ func handleNodeFail(m Member, membershipList map[string]Member) {
 
 // Ensures order of chunks is the same as primary, creates missing files, and deletes extraneous files
 func merge(hyDFSFile string, membershipList map[string]Member, mergeType MergeType) {
+	start := time.Now()
+
 	predecessor := GetRingPredecessor(GetRingId(selfId), membershipList)
 	predecessor2 := GetRingPredecessor(GetRingId(KeyFor(predecessor)), membershipList)
 
@@ -1190,6 +1192,11 @@ func merge(hyDFSFile string, membershipList map[string]Member, mergeType MergeTy
 			myCopy.Chunks = primaryCopy.Chunks
 			HyDFSFiles.Store(hyDFSFile, myCopy)
 		}
+	}
+
+	elapsed := time.Since(start)
+	if rrLog != nil {
+		rrLog.Printf("[Merge time] completed in %v", elapsed)
 	}
 }
 

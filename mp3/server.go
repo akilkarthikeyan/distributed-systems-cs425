@@ -1230,6 +1230,7 @@ func main() {
 	http.HandleFunc("/get", handleGet)
 	http.HandleFunc("/merge", handleMerge)
 	http.HandleFunc("/ls", handleLs)
+	http.HandleFunc("/list_mem_ids", handleListMemIds)
 
 	// Start the HTTP server in a non-blocking goroutine
 	commandHostPort := fmt.Sprintf(":%d", CommandPort)

@@ -1694,3 +1694,49 @@ func handleLs(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(response)
 }
+
+func handleListMemIds(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed. Use GET.", http.StatusMethodNotAllowed)
+		return
+	}
+
+	members := SnapshotMembers(false)
+
+	// Structs for marshalling a machine-readable JSON response
+	type kv struct {
+		ID string
+		M  Member
+	}
+	type MemberInfo struct {
+		RingID      uint64 `json:"ring_id"`
+		ID          string `json:"id"`
+		Status      string `json:"status"`
+		Heartbeat   int    `json:"heartbeat"`
+		LastUpdated int    `json:"last_updated_tick"`
+	}
+
+	var sorted []kv
+	for id, m := range members {
+		sorted = append(sorted, kv{id, m})
+	}
+
+	// Sort by RingID
+	sort.Slice(sorted, func(i, j int) bool {
+		return sorted[i].M.RingID < sorted[j].M.RingID
+	})
+
+	responseList := make([]MemberInfo, len(sorted))
+	for i, item := range sorted {
+		responseList[i] = MemberInfo{
+			RingID:      item.M.RingID,
+			ID:          item.ID,
+			Status:      string(item.M.Status),
+			Heartbeat:   item.M.Heartbeat,
+			LastUpdated: item.M.LastUpdated,
+		}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(responseList)
+}

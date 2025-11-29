@@ -1,13 +1,13 @@
 package main
 
 import (
-	"bufio"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"log"
 	"net"
+	"net/http"
 	"os"
 	"path/filepath"
 	"sort"
@@ -25,6 +25,8 @@ var selfHost string
 var selfId string
 
 var udpConn *net.UDPConn
+
+const CommandPort = 8080 // Choose any unused port > 1024
 
 func sendUDP(addr *net.UDPAddr, msg *Message) {
 	data, err := json.Marshal(msg)
@@ -1221,14 +1223,26 @@ func main() {
 
 	go gossip(TimeUnit)
 
-	scanner := bufio.NewScanner(os.Stdin)
-	for scanner.Scan() {
-		line := scanner.Text()
-		handleCommand(line)
-	}
-	if err := scanner.Err(); err != nil {
-		fmt.Printf("stdin error: %v\n", err)
-	}
+	// Register the handler for the command you were testing
+	http.HandleFunc("/list_self", handleListSelf)
+	http.HandleFunc("/create", handleCreate)
+	http.HandleFunc("/append", handleAppend)
+	http.HandleFunc("/get", handleGet)
+	http.HandleFunc("/merge", handleMerge)
+	http.HandleFunc("/ls", handleLs)
+
+	// Start the HTTP server in a non-blocking goroutine
+	commandHostPort := fmt.Sprintf(":%d", CommandPort)
+	log.Printf("Starting command HTTP server on all interfaces (0.0.0.0)%s", commandHostPort)
+
+	go func() {
+		// The empty string means "listen on all IPs bound to this machine"
+		if err := http.ListenAndServe(commandHostPort, nil); err != nil {
+			log.Fatalf("HTTP command server failed: %v", err)
+		}
+	}()
+
+	select {}
 }
 
 func handleCommand(line string) {
@@ -1468,4 +1482,215 @@ func handleCommand(line string) {
 	default:
 		fmt.Println("Unknown command:", line)
 	}
+}
+
+// --- Types for HTTP Command Requests/Responses ---
+
+// Request for 'create'
+type CreateHttpRequest struct {
+	LocalFilename string `json:"local_filename"`
+	HyDFSFilename string `json:"hydfs_filename"`
+}
+
+// Request for 'append'
+type AppendHttpRequest struct {
+	LocalFilename string `json:"local_filename"`
+	HyDFSFilename string `json:"hydfs_filename"`
+}
+
+// Request for 'get'
+type GetHttpRequest struct {
+	HyDFSFilename string `json:"hydfs_filename"`
+	LocalFilename string `json:"local_filename"`
+}
+
+// Request for 'merge'
+type MergeHttpRequest struct {
+	HyDFSFilename string `json:"hydfs_filename"`
+}
+
+func handleCreate(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed. Use POST.", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req CreateHttpRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, fmt.Sprintf("Invalid request body: %v", err), http.StatusBadRequest)
+		return
+	}
+
+	if req.LocalFilename == "" || req.HyDFSFilename == "" {
+		http.Error(w, "Both local_filename and hydfs_filename are required.", http.StatusBadRequest)
+		return
+	}
+
+	success := createOrAppendHyDFSFile(req.LocalFilename, req.HyDFSFilename, true)
+
+	if success {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(fmt.Sprintf("%s created successfully in HyDFS.", req.HyDFSFilename)))
+	} else {
+		http.Error(w, fmt.Sprintf("Failed to create %s in HyDFS. File may already exist or quorum failed.", req.HyDFSFilename), http.StatusInternalServerError)
+	}
+}
+
+func handleAppend(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed. Use POST.", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req AppendHttpRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, fmt.Sprintf("Invalid request body: %v", err), http.StatusBadRequest)
+		return
+	}
+
+	if req.LocalFilename == "" || req.HyDFSFilename == "" {
+		http.Error(w, "Both local_filename and hydfs_filename are required.", http.StatusBadRequest)
+		return
+	}
+
+	success := createOrAppendHyDFSFile(req.LocalFilename, req.HyDFSFilename, false)
+
+	if success {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(fmt.Sprintf("Appended %s successfully to HyDFS file.", req.HyDFSFilename)))
+	} else {
+		http.Error(w, fmt.Sprintf("Failed to append to HyDFS file %s. File may not exist or quorum failed.", req.HyDFSFilename), http.StatusInternalServerError)
+	}
+}
+
+func handleGet(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed. Use POST.", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req GetHttpRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, fmt.Sprintf("Invalid request body: %v", err), http.StatusBadRequest)
+		return
+	}
+
+	if req.HyDFSFilename == "" || req.LocalFilename == "" {
+		http.Error(w, "Both hydfs_filename and local_filename are required.", http.StatusBadRequest)
+		return
+	}
+
+	success := getHyDFSFile(req.HyDFSFilename, req.LocalFilename)
+
+	if success {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(fmt.Sprintf("Retrieved HyDFS file %s to %s!", req.HyDFSFilename, req.LocalFilename)))
+	} else {
+		http.Error(w, fmt.Sprintf("Failed to retrieve HyDFS file %s.", req.HyDFSFilename), http.StatusNotFound)
+	}
+}
+
+func handleMerge(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed. Use POST.", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req MergeHttpRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, fmt.Sprintf("Invalid request body: %v", err), http.StatusBadRequest)
+		return
+	}
+	hyDFSfilename := req.HyDFSFilename
+
+	if hyDFSfilename == "" {
+		http.Error(w, "hyDFS_filename is required.", http.StatusBadRequest)
+		return
+	}
+
+	// --- Original Logic ---
+	membershipList := SnapshotMembers(true)
+	go merge(hyDFSfilename, membershipList, MergeOne) // Run asynchronously
+
+	v, _ := MembershipList.Load(selfId)
+	self := v.(Member)
+	payloadBytes, _ := json.Marshal(MergeRequest{
+		HyDFSFilename: hyDFSfilename,
+		MergeType:     MergeOne,
+	})
+	msg := Message{
+		MessageType: Merge,
+		From:        &self,
+		Payload:     payloadBytes,
+	}
+	multicastMessage(&msg, membershipList) // Multicast merge message
+
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte(fmt.Sprintf("Merge for %s initiated (multicasted)!", hyDFSfilename)))
+}
+
+func handleListSelf(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed. Use GET.", http.StatusMethodNotAllowed)
+		return
+	}
+
+	// Response is just the selfId string
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte(selfId))
+}
+
+func handleLs(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed. Use GET.", http.StatusMethodNotAllowed)
+		return
+	}
+
+	// Get filename from query parameter: /ls?filename=my_file
+	hyDFSfilename := r.URL.Query().Get("filename")
+	if hyDFSfilename == "" {
+		http.Error(w, "Query parameter 'filename' is required (e.g., /ls?filename=test.txt).", http.StatusBadRequest)
+		return
+	}
+
+	// Structs for JSON output
+	type ReplicaInfo struct {
+		RingID uint64 `json:"ring_id"`
+		ID     string `json:"id"`
+	}
+
+	membershipList := SnapshotMembers(true)
+	isPresent := false
+	var replicas []ReplicaInfo
+
+	for id, target := range membershipList {
+		hyDFSFiles, err := getFilesFromTarget(target, hyDFSfilename, Meta)
+		if err != nil {
+			// Log the error but continue checking other members
+			log.Printf("Error checking member %s for file metadata: %v", id, err)
+			continue
+		}
+		if _, ok := hyDFSFiles[hyDFSfilename]; ok {
+			isPresent = true
+			replicas = append(replicas, ReplicaInfo{
+				RingID: GetRingId(id),
+				ID:     id,
+			})
+		}
+	}
+
+	if !isPresent {
+		http.Error(w, fmt.Sprintf("File %s not found in HyDFS", hyDFSfilename), http.StatusNotFound)
+		return
+	}
+
+	// Prepare final JSON response
+	response := map[string]any{
+		"filename":     hyDFSfilename,
+		"file_ring_id": GetRingId(hyDFSfilename),
+		"replicas":     replicas,
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(response)
 }

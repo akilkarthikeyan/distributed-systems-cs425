@@ -3,8 +3,10 @@ package main
 import (
 	"bufio"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"os"
 	"strings"
@@ -36,12 +38,84 @@ func listenUDP() {
 			fmt.Printf("listen udp unmarshal from %v error: %v", raddr, err)
 			continue
 		}
-		handleMessage(&msg)
+		handleMessage(&msg, nil)
 	}
 }
 
-func handleMessage(msg *Message) {
+func sendTCP(addr string, msg *Message) (*Message, error) {
+	conn, err := net.Dial("tcp", addr)
+	if err != nil {
+		return nil, err
+	}
+	defer conn.Close()
 
+	decoder := json.NewDecoder(conn)
+	encoder := json.NewEncoder(conn)
+
+	// Send request
+	if err := encoder.Encode(msg); err != nil {
+		return nil, err
+	}
+
+	// Wait for response
+	var resp Message
+	if err := decoder.Decode(&resp); err != nil {
+		return nil, err
+	}
+
+	return &resp, nil
+}
+
+func listenTCP(ln net.Listener) {
+	for {
+		conn, err := ln.Accept()
+		if err != nil {
+			fmt.Printf("listen tcp accept error: %v", err)
+			continue
+		}
+		// Handle each client in a separate goroutine
+		go handleTCPClient(conn)
+	}
+}
+
+func handleTCPClient(conn net.Conn) {
+	defer conn.Close()
+	decoder := json.NewDecoder(conn)
+	encoder := json.NewEncoder(conn)
+
+	for {
+		var msg Message
+		if err := decoder.Decode(&msg); err != nil {
+			if errors.Is(err, io.EOF) {
+				// Connection closed by client, so return
+			} else {
+				fmt.Printf("handle tcp decode from %v error: %v\n", conn.RemoteAddr(), err)
+			}
+			return
+		}
+		handleMessage(&msg, encoder)
+	}
+}
+
+func handleMessage(msg *Message, encoder *json.Encoder) { // encoder can only be present for TCP messages
+	log.Printf("recv %s from %s %s", msg.MessageType, msg.From.WhoAmI, fmt.Sprintf("%s:%d", msg.From.IP, msg.From.Port))
+
+	switch msg.MessageType {
+	// TCP message
+	case Join: // will recv join if you are the leader
+		// add node to list of nodes
+		NewNode := *msg.From
+		Nodes = append(Nodes, NewNode)
+		// send ack back to joining node
+		ackMsg := &Message{
+			MessageType: Ack,
+			From:        &SelfNode,
+		}
+		encoder.Encode(ackMsg)
+
+	default:
+		fmt.Printf("unknown message type: %s\n", msg.MessageType)
+	}
 }
 
 func handleCommand(fields []string) {
@@ -161,8 +235,6 @@ func handleCommand(fields []string) {
 }
 
 func printUsage() {
-	// fmt.Println("--- HyDFS Client Interface ---")
-	// fmt.Println("Connects to:", HyDFSServerURL)
 	fmt.Println("Enter commands")
 	fmt.Println("\nAvailable commands:")
 	fmt.Println("  hydfs_list_mem_ids")
@@ -176,9 +248,13 @@ func printUsage() {
 }
 
 func main() {
-
-	reader := bufio.NewScanner(os.Stdin)
-	printUsage()
+	f, err := os.OpenFile("server.log", os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
+	if err != nil {
+		fmt.Printf("log file open error: %v", err)
+		return
+	}
+	defer f.Close()
+	log.SetOutput(f)
 
 	// Get self hostname
 	hostname, err := os.Hostname()
@@ -186,9 +262,53 @@ func main() {
 		fmt.Printf("get hostname error: %v", err)
 		return
 	}
-	selfHost = hostname
+	SelfHost = hostname
 
-	// Main loop reads commands from stdin
+	// Add yourself to list of nodes
+	SelfNode = Process{
+		WhoAmI: Node,
+		IP:     SelfHost,
+		Port:   SelfPort,
+	}
+	Nodes = append(Nodes, SelfNode)
+
+	// Listen for UDP messages
+	listenAddr, err := net.ResolveUDPAddr("udp", fmt.Sprintf(":%d", SelfPort))
+	if err != nil {
+		fmt.Printf("resolve listenAddr error: %v", err)
+		return
+	}
+	udpConn, err = net.ListenUDP("udp", listenAddr)
+	if err != nil {
+		fmt.Printf("udp error: %v", err)
+	}
+	defer udpConn.Close()
+
+	go listenUDP()
+
+	// Listen for TCP messages
+	tcpLn, err := net.Listen("tcp", fmt.Sprintf(":%d", SelfPort))
+	if err != nil {
+		fmt.Printf("tcp error: %v", err)
+		return
+	}
+
+	go listenTCP(tcpLn)
+
+	// Send join msg to leader process if you are not the leader
+	if !(SelfHost == LeaderHost && SelfPort == LeaderPort) {
+		joinMsg := &Message{
+			MessageType: Join,
+			From:        &SelfNode,
+		}
+		leaderAddr := fmt.Sprintf("%s:%d", LeaderHost, LeaderPort)
+		sendTCP(leaderAddr, joinMsg)
+	}
+
+	reader := bufio.NewScanner(os.Stdin)
+	printUsage()
+
+	// main loop reads commands from stdin
 	for reader.Scan() {
 		line := reader.Text()
 		fields := strings.Fields(line)

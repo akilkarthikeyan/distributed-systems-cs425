@@ -6,62 +6,96 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"os"
 	"os/exec"
+	"strconv"
 )
 
 var inputWriter *bufio.Writer
+var udpConn *net.UDPConn
 
-func connectTCP(addr string) (net.Conn, *json.Encoder, *json.Decoder, error) {
-	conn, err := net.Dial("tcp", addr)
-	if err != nil {
-		return nil, nil, nil, err
-	}
+func handleMessage(msg *Message, inputWriter *bufio.Writer) {
 
-	encoder := json.NewEncoder(conn)
-	decoder := json.NewDecoder(conn)
-
-	return conn, encoder, decoder, nil
 }
 
-func sendAndReceivePersistent(conn net.Conn, encoder *json.Encoder, decoder *json.Decoder, msg *Message) (*Message, error) {
-	// Send request
-	if err := encoder.Encode(msg); err != nil {
-		conn.Close()
-		return nil, err
+func sendUDP(addr *net.UDPAddr, msg *Message) {
+	data, err := json.Marshal(msg)
+	if err != nil {
+		fmt.Printf("send udp marshal error: %v", err)
+		return
 	}
-
-	// Wait for response
-	var resp Message
-	if err := decoder.Decode(&resp); err != nil {
-		conn.Close()
-		return nil, err
+	if _, err := udpConn.WriteToUDP(data, addr); err != nil {
+		fmt.Printf("send udp write error: %v", err)
 	}
+}
 
-	return &resp, nil
+func listenUDP() {
+	buf := make([]byte, 4096)
+	for {
+		n, raddr, err := udpConn.ReadFromUDP(buf)
+		if err != nil {
+			fmt.Printf("listen udp read error: %v", err)
+			continue
+		}
+		var msg Message
+		if err := json.Unmarshal(buf[:n], &msg); err != nil {
+			fmt.Printf("listen udp unmarshal from %v error: %v", raddr, err)
+			continue
+		}
+		handleMessage(&msg, nil)
+	}
 }
 
 func main() {
-	// Remove this later
-	inputTuple := "example_user_record_123"
+	if len(os.Args) < 3 {
+		fmt.Printf("insufficient arguments; expected: <op_exe_path> <port> [op_args...]\n")
+		return
+	}
 
-	opExePath := "./op1"
-	cmd := exec.Command(opExePath)
+	opExePath := os.Args[1]
+	portStr := os.Args[2]
 
-	// Get persistent pipe handles
+	var opArgs []string
+	if len(os.Args) > 3 {
+		opArgs = os.Args[3:]
+	}
+
+	// Convert port string to int
+	var port int
+	if p, err := strconv.Atoi(portStr); err == nil {
+		port = p
+	} else {
+		fmt.Printf("invalid port: %v\n", err)
+		return
+	}
+
+	cmd := exec.Command(opExePath, opArgs...)
+
 	stdinPipe, _ := cmd.StdinPipe()
 	stdoutPipe, _ := cmd.StdoutPipe()
 
 	defer stdinPipe.Close()
 	defer cmd.Wait()
 
+	// Start the operator process
 	cmd.Start()
-
 	inputWriter = bufio.NewWriter(stdinPipe)
 
 	go startOutputReader(stdoutPipe)
 
-	// Remove this later
-	sendTuple(inputTuple, inputWriter)
+	// Listen for UDP messages
+	listenAddr, err := net.ResolveUDPAddr("udp", fmt.Sprintf(":%d", port))
+	if err != nil {
+		fmt.Printf("resolve listenAddr error: %v", err)
+		return
+	}
+	udpConn, err = net.ListenUDP("udp", listenAddr)
+	if err != nil {
+		fmt.Printf("udp error: %v", err)
+	}
+	defer udpConn.Close()
+
+	go listenUDP()
 
 	select {}
 }
@@ -78,3 +112,7 @@ func sendTuple(tuple string, inputWriter *bufio.Writer) {
 	fmt.Fprintf(inputWriter, "%s\n", tuple)
 	inputWriter.Flush()
 }
+
+// TODO: send heartbeat to leader periodically
+// TODO: what to do if you are the source task
+// TODO: handle exactly-once semantics

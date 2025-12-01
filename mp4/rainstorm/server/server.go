@@ -98,7 +98,7 @@ func handleTCPClient(conn net.Conn) {
 }
 
 func handleMessage(msg *Message, encoder *json.Encoder) { // encoder can only be present for TCP messages
-	log.Printf("recv %s from %s %s", msg.MessageType, msg.From.WhoAmI, fmt.Sprintf("%s:%d", msg.From.IP, msg.From.Port))
+	log.Printf("recv %s from %s %s", msg.MessageType, msg.From.WhoAmI, GetProcessAddress(msg.From))
 
 	switch msg.MessageType {
 	// TCP message
@@ -303,6 +303,7 @@ func main() {
 		}
 		leaderAddr := fmt.Sprintf("%s:%d", LeaderHost, LeaderPort)
 		sendTCP(leaderAddr, joinMsg)
+		log.Printf("sent %s to %s", joinMsg.MessageType, leaderAddr)
 	}
 
 	reader := bufio.NewScanner(os.Stdin)

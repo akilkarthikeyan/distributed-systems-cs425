@@ -23,6 +23,9 @@ var (
 	opTypeStr    string
 	opType       OpType
 
+	stage     int
+	taskIndex int
+
 	inputRate int
 
 	hydfsSourceFile string
@@ -44,11 +47,11 @@ func handleMessage(msg *Message, inputWriter *bufio.Writer) {
 func sendUDP(addr *net.UDPAddr, msg *Message) {
 	data, err := json.Marshal(msg)
 	if err != nil {
-		fmt.Printf("send udp marshal error: %v", err)
+		log.Printf("send udp marshal error: %v\n", err)
 		return
 	}
 	if _, err := udpConn.WriteToUDP(data, addr); err != nil {
-		fmt.Printf("send udp write error: %v", err)
+		log.Printf("send udp write error: %v\n", err)
 	}
 }
 
@@ -57,12 +60,12 @@ func listenUDP() {
 	for {
 		n, raddr, err := udpConn.ReadFromUDP(buf)
 		if err != nil {
-			fmt.Printf("listen udp read error: %v", err)
+			log.Printf("listen udp read error: %v\n", err)
 			continue
 		}
 		var msg Message
 		if err := json.Unmarshal(buf[:n], &msg); err != nil {
-			fmt.Printf("listen udp unmarshal from %v error: %v", raddr, err)
+			log.Printf("listen udp unmarshal from %v error: %v\n", raddr, err)
 			continue
 		}
 		handleMessage(&msg, nil)
@@ -76,7 +79,7 @@ func main() {
 	os.MkdirAll("../logs", 0755)
 	f, err := os.OpenFile(logFile, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
 	if err != nil {
-		fmt.Printf("log file open error: %v", err)
+		// fmt.Printf("log file open error: %v", err)
 		return
 	}
 	defer f.Close()
@@ -85,6 +88,9 @@ func main() {
 	flag.StringVar(&opPath, "opPath", "", "Path to the external op_exe executable.")
 	flag.StringVar(&opArgsString, "opArgs", "", "Space-separated arguments for the op_exe.")
 	flag.StringVar(&opTypeStr, "opType", "", "Type of operator (Source, Filter, Sink, etc.).")
+
+	flag.IntVar(&stage, "stage", 0, "Stage number of this task.")
+	flag.IntVar(&taskIndex, "taskIndex", 0, "Task index within the stage.")
 
 	flag.IntVar(&inputRate, "inputRate", -1, "Input rate (default is -1).")
 

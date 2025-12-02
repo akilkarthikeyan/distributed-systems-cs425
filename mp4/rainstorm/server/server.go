@@ -10,6 +10,7 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 	"sync"
 )
@@ -132,7 +133,7 @@ func handleMessage(msg *Message, encoder *json.Encoder) { // encoder can only be
 		// Remove later
 		reqPayload := SpawnTaskRequestPayload{
 			OpPath:           "../bin/identity",
-			OpArgs:           []string{"arg1", "arg2"},
+			OpArgs:           "arg1 arg2",
 			OpType:           string(OtherOp),
 			AutoScaleEnabled: false,
 			ExactlyOnce:      false,
@@ -154,8 +155,10 @@ func handleMessage(msg *Message, encoder *json.Encoder) { // encoder can only be
 		args := []string{
 			"--port", fmt.Sprintf("%d", port),
 			"--opPath", payload.OpPath,
-			"--opArgs", strings.Join(payload.OpArgs, " "),
+			"--opArgs", payload.OpArgs,
 			"--opType", payload.OpType,
+			"--stage", fmt.Sprintf("%d", payload.Stage),
+			"--taskIndex", fmt.Sprintf("%d", payload.TaskIndex),
 			"--autoscaleEnabled", fmt.Sprintf("%t", payload.AutoScaleEnabled),
 			"--exactlyOnce", fmt.Sprintf("%t", payload.ExactlyOnce),
 		}
@@ -195,6 +198,88 @@ func handleMessage(msg *Message, encoder *json.Encoder) { // encoder can only be
 	default:
 		fmt.Printf("unknown message type: %s\n", msg.MessageType)
 	}
+}
+
+func startRainStorm() {
+	// Spawn tasks
+	for stage := 0; stage < Nstages; stage++ {
+		// Stage 0 tasks are actually Stage 1 tasks, because Stage 0 is the separate source task
+		for taskIndex := 0; taskIndex < NtasksPerStage; taskIndex++ {
+			opPath := OpPaths[stage]
+			opArgs := OpArgsList[stage]
+			opType := OtherOp
+			if stage == Nstages-1 {
+				opType = SinkOp
+			}
+			reqPayload := SpawnTaskRequestPayload{
+				OpPath:           opPath,
+				OpArgs:           opArgs,
+				OpType:           string(opType),
+				Stage:            stage + 1,
+				TaskIndex:        taskIndex,
+				AutoScaleEnabled: AutoScaleEnabled,
+				ExactlyOnce:      ExactlyOnce,
+			}
+			if stage == Nstages-1 {
+				reqPayload.HyDFSDestFile = HyDFSDestFile
+			}
+			if AutoScaleEnabled {
+				reqPayload.LW = LW
+				reqPayload.HW = HW
+			}
+
+			payloadBytes, _ := json.Marshal(reqPayload)
+			reqMsg := &Message{
+				MessageType: SpawnTaskRequest,
+				From:        &SelfNode,
+				Payload:     payloadBytes,
+			}
+			targetNode := Nodes[AssignNode(stage+1, taskIndex, len(Nodes))]
+			response, _ := sendTCP(GetProcessAddress(&targetNode), reqMsg)
+			var respPayload SpawnTaskResponsePayload
+			json.Unmarshal(response.Payload, &respPayload)
+
+			Tasks[GetTaskKey(stage+1, taskIndex)] = TaskInfo{
+				PID:         respPayload.PID,
+				TaskType:    opType,
+				IP:          respPayload.IP,
+				Port:        respPayload.Port,
+				NodeIP:      targetNode.IP,
+				LastUpdated: 0, // this boy hasn't started updating yet
+			}
+
+			log.Printf("spawned %s task stage %d index %d at %s:%d with pid %d", reqPayload.OpType, stage+1, taskIndex, respPayload.IP, respPayload.Port, respPayload.PID)
+		}
+	}
+	// Spawn source task
+	// reqPayload := SpawnTaskRequestPayload{
+	// 	OpType:          string(SourceOp),
+	// 	Stage:           0,
+	// 	TaskIndex:       0,
+	// 	HyDFSSourceFile: HyDFSSourceFile,
+	// 	InputRate:       InputRate,
+	// }
+	// payloadBytes, _ := json.Marshal(reqPayload)
+	// reqMsg := &Message{
+	// 	MessageType: SpawnTaskRequest,
+	// 	From:        &SelfNode,
+	// 	Payload:     payloadBytes,
+	// }
+	// targetNode := Nodes[AssignNode(0, 0, len(Nodes))]
+	// response, _ := sendTCP(GetProcessAddress(&targetNode), reqMsg)
+	// var respPayload SpawnTaskResponsePayload
+	// json.Unmarshal(response.Payload, &respPayload)
+
+	// Tasks[GetTaskKey(0, 0)] = TaskInfo{
+	// 	PID:         respPayload.PID,
+	// 	TaskType:    SourceOp,
+	// 	IP:          respPayload.IP,
+	// 	Port:        respPayload.Port,
+	// 	NodeIP:      targetNode.IP,
+	// 	LastUpdated: 0,
+	// }
+
+	// log.Printf("spawned %s task stage %d index %d at %s:%d with pid %d", reqPayload.OpType, 0, 0, respPayload.IP, respPayload.Port, respPayload.PID)
 }
 
 func handleCommand(fields []string) {
@@ -306,6 +391,63 @@ func handleCommand(fields []string) {
 		} else {
 			fmt.Printf("ERROR: %v\n", err)
 		}
+
+	case "rainstorm":
+		// check if leader
+		if SelfHost != LeaderHost || SelfPort != LeaderPort {
+			fmt.Println("ERROR: Only the leader can handle rainstorm commands")
+			return
+		}
+		// RainStorm <Nstages> <Ntasks_per_stage> <op1_exe> <op1_args> … <opNstages_exe>
+		// <opNstages_args> <hydfs_src_directory> <hydfs_dest_filename> <exactly_once>
+		// <autoscale_enabled> <INPUT_RATE> <LW> <HW>
+		var err error
+		Nstages, err = strconv.Atoi(fields[1])
+		if err != nil {
+			fmt.Printf("ERROR: %v\n", err)
+			return
+		}
+		NtasksPerStage, err = strconv.Atoi(fields[2])
+		if err != nil {
+			fmt.Printf("ERROR: %v\n", err)
+			return
+		}
+		for i := 0; i < Nstages; i++ {
+			opPath := fields[3+i*2]
+			opArgs := fields[4+i*2]
+			OpPaths = append(OpPaths, opPath)
+			OpArgsList = append(OpArgsList, opArgs)
+		}
+		HyDFSSourceFile = fields[3+Nstages*2]
+		HyDFSDestFile = fields[4+Nstages*2]
+		ExactlyOnce, err = strconv.ParseBool(fields[5+Nstages*2])
+		if err != nil {
+			fmt.Printf("ERROR: %v\n", err)
+			return
+		}
+		AutoScaleEnabled, err = strconv.ParseBool(fields[6+Nstages*2])
+		if err != nil {
+			fmt.Printf("ERROR: %v\n", err)
+			return
+		}
+		InputRate, err = strconv.Atoi(fields[7+Nstages*2])
+		if err != nil {
+			fmt.Printf("ERROR: %v\n", err)
+			return
+		}
+		if AutoScaleEnabled {
+			LW, err = strconv.Atoi(fields[8+Nstages*2])
+			if err != nil {
+				fmt.Printf("ERROR: %v\n", err)
+				return
+			}
+			HW, err = strconv.Atoi(fields[9+Nstages*2])
+			if err != nil {
+				fmt.Printf("ERROR: %v\n", err)
+				return
+			}
+		}
+		go startRainStorm()
 
 	default:
 		fmt.Println("Unknown command:", command)

@@ -40,6 +40,7 @@ type Process struct {
 
 type TaskInfo struct {
 	PID         int    `json:"pid"`
+	TaskType    OpType `json:"taskType"`
 	IP          string `json:"ip"`
 	Port        int    `json:"port"`
 	NodeIP      string `json:"nodeIp"`
@@ -75,16 +76,19 @@ type SpawnTaskRequestPayload struct {
 	// Also send LW, HW if autoscale is enabled
 	// AutoScaleEnabled --> bool
 	// ExactlyOnce --> bool
-	OpPath           string   `json:"opPath"`
-	OpArgs           []string `json:"opArgs"`
-	OpType           string   `json:"opType"`
-	InputRate        int      `json:"inputRate,omitempty"`
-	HyDFSSourceFile  string   `json:"hydfsSourceFile,omitempty"`
-	HyDFSDestFile    string   `json:"hydfsDestFile,omitempty"`
-	AutoScaleEnabled bool     `json:"autoScaleEnabled,omitempty"`
-	ExactlyOnce      bool     `json:"exactlyOnce,omitempty"`
-	LW               int      `json:"lw,omitempty"`
-	HW               int      `json:"hw,omitempty"`
+	OpPath string `json:"opPath"`
+	OpArgs string `json:"opArgs"` // space-separated args
+	OpType string `json:"opType"`
+	// -- The next 2 are the identity of the task being spawned --
+	Stage            int    `json:"stage,omitempty"`
+	TaskIndex        int    `json:"taskIndex,omitempty"`
+	InputRate        int    `json:"inputRate,omitempty"`
+	HyDFSSourceFile  string `json:"hydfsSourceFile,omitempty"`
+	HyDFSDestFile    string `json:"hydfsDestFile,omitempty"`
+	AutoScaleEnabled bool   `json:"autoScaleEnabled,omitempty"`
+	ExactlyOnce      bool   `json:"exactlyOnce,omitempty"`
+	LW               int    `json:"lw,omitempty"`
+	HW               int    `json:"hw,omitempty"`
 }
 
 type SpawnTaskResponsePayload struct {
@@ -99,12 +103,17 @@ type SpawnTaskResponsePayload struct {
 
 // Used if this process is the leader
 
+var Nstages int
+var NtasksPerStage int
+var OpPaths []string
+var OpArgsList []string
+var ExactlyOnce bool
 var AutoScaleEnabled bool
-var TuplesPerSecond int
+var InputRate int
 var LW int
 var HW int
 var HyDFSSourceFile string
 var HyDFSDestFile string
 
 var Nodes []Process
-var Tasks []TaskInfo
+var Tasks map[string]TaskInfo // Key is "stage_taskIndex"

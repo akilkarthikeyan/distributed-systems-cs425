@@ -8,6 +8,14 @@ const (
 	Ack MessageType = "ack"
 )
 
+type OpType string
+
+const (
+	SourceOp OpType = "source"
+	SinkOp   OpType = "sink"
+	OtherOp  OpType = "other"
+)
+
 type Task struct {
 	IP   string `json:"ip"`
 	Port int    `json:"port"`

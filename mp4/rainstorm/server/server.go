@@ -9,10 +9,27 @@ import (
 	"log"
 	"net"
 	"os"
+	"os/exec"
 	"strings"
+	"sync"
 )
 
 var udpConn *net.UDPConn
+var portList []int
+var portMutex sync.Mutex
+
+const taskExePath = "../task/task"
+
+func popPort() (int, error) {
+	portMutex.Lock()
+	defer portMutex.Unlock()
+	if len(portList) == 0 {
+		return 0, fmt.Errorf("no available ports")
+	}
+	p := portList[0]
+	portList = portList[1:]
+	return p, nil
+}
 
 func sendUDP(addr *net.UDPAddr, msg *Message) {
 	data, err := json.Marshal(msg)
@@ -112,6 +129,68 @@ func handleMessage(msg *Message, encoder *json.Encoder) { // encoder can only be
 			From:        &SelfNode,
 		}
 		encoder.Encode(ackMsg)
+		// Remove later
+		reqPayload := SpawnTaskRequestPayload{
+			OpPath:           "identity",
+			OpArgs:           []string{"arg1", "arg2"},
+			OpType:           string(OtherOp),
+			AutoScaleEnabled: false,
+			ExactlyOnce:      false,
+		}
+		payloadBytes, _ := json.Marshal(reqPayload)
+		reqMsg := &Message{
+			MessageType: SpawnTaskRequest,
+			From:        &SelfNode,
+			Payload:     payloadBytes,
+		}
+		response, _ := sendTCP(GetProcessAddress(msg.From), reqMsg)
+		log.Printf("received spawn task response: %+v", response)
+
+	// TCP message
+	case SpawnTaskRequest:
+		var payload SpawnTaskRequestPayload
+		json.Unmarshal(msg.Payload, &payload)
+		port, _ := popPort()
+		args := []string{
+			"--port", fmt.Sprintf("%d", port),
+			"--opPath", payload.OpPath,
+			"--opArgs", strings.Join(payload.OpArgs, " "),
+			"--opType", payload.OpType,
+			"--autoscaleEnabled", fmt.Sprintf("%t", payload.AutoScaleEnabled),
+			"--exactlyOnce", fmt.Sprintf("%t", payload.ExactlyOnce),
+		}
+
+		if payload.OpType == string(SourceOp) {
+			args = append(args, "--hydfsSourceFile", payload.HyDFSSourceFile)
+			args = append(args, "--inputRate", fmt.Sprintf("%d", payload.InputRate))
+		} else if payload.OpType == string(SinkOp) {
+			args = append(args, "--hydfsDestFile", payload.HyDFSDestFile)
+		}
+
+		if payload.AutoScaleEnabled {
+			args = append(args, "--lw", fmt.Sprintf("%d", payload.LW))
+			args = append(args, "--hw", fmt.Sprintf("%d", payload.HW))
+		}
+
+		cmd := exec.Command(taskExePath, args...)
+		if err := cmd.Start(); err != nil {
+			fmt.Printf("spawn task exec error: %v", err)
+			return
+		}
+
+		respPayload := SpawnTaskResponsePayload{
+			Success: true,
+			PID:     cmd.Process.Pid,
+			IP:      SelfHost,
+			Port:    port,
+		}
+		payloadBytes, _ := json.Marshal(respPayload)
+		respMsg := &Message{
+			MessageType: SpawnTaskResponse,
+			From:        &SelfNode,
+			Payload:     payloadBytes,
+		}
+		encoder.Encode(respMsg)
 
 	default:
 		fmt.Printf("unknown message type: %s\n", msg.MessageType)
@@ -271,6 +350,12 @@ func main() {
 		Port:   SelfPort,
 	}
 	Nodes = append(Nodes, SelfNode)
+
+	// Initialize port list
+	portList = make([]int, 0, 9500-9001+1)
+	for p := 9001; p <= 9500; p++ {
+		portList = append(portList, p)
+	}
 
 	// Listen for UDP messages
 	listenAddr, err := net.ResolveUDPAddr("udp", fmt.Sprintf(":%d", SelfPort))

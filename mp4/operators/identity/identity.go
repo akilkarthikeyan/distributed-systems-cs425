@@ -11,7 +11,7 @@ func main() {
 	for scanner.Scan() {
 		inputTuple := scanner.Text()
 		outputTuple := identity(inputTuple)
-		fmt.Println(outputTuple)
+		fmt.Printf("%s %s %s\n", outputTuple, os.Args[0], os.Args[1])
 	}
 }
 

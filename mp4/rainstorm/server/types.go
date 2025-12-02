@@ -11,8 +11,10 @@ var SelfHost string
 var SelfNode Process
 
 const (
-	Join MessageType = "join"
-	Ack  MessageType = "ack"
+	Join              MessageType = "join"
+	Ack               MessageType = "ack"
+	SpawnTaskRequest  MessageType = "spawn_task_request"
+	SpawnTaskResponse MessageType = "spawn_task_response"
 )
 
 type ProcessType string
@@ -20,6 +22,14 @@ type ProcessType string
 const (
 	Node ProcessType = "node"
 	Task ProcessType = "task"
+)
+
+type OpType string
+
+const (
+	SourceOp OpType = "source"
+	SinkOp   OpType = "sink"
+	OtherOp  OpType = "other"
 )
 
 type Process struct {
@@ -53,6 +63,38 @@ const (
 
 type AckPayload struct {
 	TupleID string `json:"tupleID"`
+}
+
+type SpawnTaskRequestPayload struct {
+	// opExe path
+	// opExe args
+	// op type
+	// HyDFS source file --> if task is a source task
+	// HyDFS dest file --> if task is part of last stage
+	// Input rate --> if source task
+	// Also send LW, HW if autoscale is enabled
+	// AutoScaleEnabled --> bool
+	// ExactlyOnce --> bool
+	OpPath           string   `json:"opPath"`
+	OpArgs           []string `json:"opArgs"`
+	OpType           string   `json:"opType"`
+	InputRate        int      `json:"inputRate,omitempty"`
+	HyDFSSourceFile  string   `json:"hydfsSourceFile,omitempty"`
+	HyDFSDestFile    string   `json:"hydfsDestFile,omitempty"`
+	AutoScaleEnabled bool     `json:"autoScaleEnabled,omitempty"`
+	ExactlyOnce      bool     `json:"exactlyOnce,omitempty"`
+	LW               int      `json:"lw,omitempty"`
+	HW               int      `json:"hw,omitempty"`
+}
+
+type SpawnTaskResponsePayload struct {
+	// PID
+	// IP
+	// Port
+	Success bool   `json:"success"`
+	PID     int    `json:"pid"`
+	IP      string `json:"ip"`
+	Port    int    `json:"port"`
 }
 
 // Used if this process is the leader

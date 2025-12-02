@@ -3,16 +3,37 @@ package main
 import (
 	"bufio"
 	"encoding/json"
+	"flag"
 	"fmt"
 	"io"
 	"net"
-	"os"
 	"os/exec"
-	"strconv"
+	"strings"
 )
 
 var inputWriter *bufio.Writer
 var udpConn *net.UDPConn
+
+var (
+	// Configuration flags
+	opPath       string
+	opArgsString string // Holds the single string from --opArgs
+	opTypeStr    string
+	opType       OpType
+
+	inputRate int
+
+	hydfsSourceFile string
+	hydfsDestFile   string
+
+	port int
+
+	autoScaleEnabled bool
+	lw               int
+	hw               int
+
+	exactlyOnce bool
+)
 
 func handleMessage(msg *Message, inputWriter *bufio.Writer) {
 
@@ -47,29 +68,38 @@ func listenUDP() {
 }
 
 func main() {
-	if len(os.Args) < 3 {
-		fmt.Printf("insufficient arguments; expected: <op_exe_path> <port> [op_args...]\n")
-		return
+	flag.StringVar(&opPath, "opPath", "", "Path to the external op_exe executable.")
+	flag.StringVar(&opArgsString, "opArgs", "", "Space-separated arguments for the op_exe.")
+	flag.StringVar(&opTypeStr, "opType", "", "Type of operator (Source, Filter, Sink, etc.).")
+
+	flag.IntVar(&inputRate, "inputRate", -1, "Input rate (default is -1).")
+
+	flag.StringVar(&hydfsSourceFile, "hydfsSourceFile", "", "HyDFS source file.")
+	flag.StringVar(&hydfsDestFile, "hydfsDestFile", "", "HyDFS destination file.")
+
+	flag.IntVar(&port, "port", 0, "The unique network port for this task.")
+
+	flag.BoolVar(&autoScaleEnabled, "autoscaleEnabled", false, "Flag to enable auto-scaling.")
+	flag.IntVar(&lw, "lw", 0, "Low watermark for autoscaling.")
+	flag.IntVar(&hw, "hw", 0, "High watermark for autoscaling.")
+
+	flag.BoolVar(&exactlyOnce, "exactlyOnce", false, "Flag to enable exactly-once processing.")
+
+	flag.Parse()
+
+	// Parse opType
+	switch strings.ToLower(opTypeStr) {
+	case "source":
+		opType = SourceOp
+	case "sink":
+		opType = SinkOp
+	default:
+		opType = OtherOp
 	}
 
-	opExePath := os.Args[1]
-	portStr := os.Args[2]
+	opArgsSlice := strings.Fields(opArgsString)
 
-	var opArgs []string
-	if len(os.Args) > 3 {
-		opArgs = os.Args[3:]
-	}
-
-	// Convert port string to int
-	var port int
-	if p, err := strconv.Atoi(portStr); err == nil {
-		port = p
-	} else {
-		fmt.Printf("invalid port: %v\n", err)
-		return
-	}
-
-	cmd := exec.Command(opExePath, opArgs...)
+	cmd := exec.Command(opPath, opArgsSlice...)
 
 	stdinPipe, _ := cmd.StdinPipe()
 	stdoutPipe, _ := cmd.StdoutPipe()
@@ -96,6 +126,10 @@ func main() {
 	defer udpConn.Close()
 
 	go listenUDP()
+
+	// to test
+	sendTuple("OMMALE", inputWriter)
+	sendTuple("YOYO HONEY SINGH", inputWriter)
 
 	select {}
 }

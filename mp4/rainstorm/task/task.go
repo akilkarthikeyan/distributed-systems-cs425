@@ -121,6 +121,7 @@ func main() {
 	defer stdinPipe.Close()
 	defer cmd.Wait()
 
+	cmd.Start()
 	inputWriter = bufio.NewWriter(stdinPipe)
 
 	go startOutputReader(stdoutPipe)

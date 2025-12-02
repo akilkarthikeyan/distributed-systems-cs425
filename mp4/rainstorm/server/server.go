@@ -510,6 +510,9 @@ func main() {
 	}
 	SelfHost = hostname
 
+	// Initialize Tasks map
+	Tasks = make(map[string]TaskInfo)
+
 	// Add yourself to list of nodes
 	SelfNode = Process{
 		WhoAmI: Node,

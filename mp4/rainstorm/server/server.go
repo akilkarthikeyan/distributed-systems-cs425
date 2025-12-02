@@ -382,54 +382,93 @@ func handleCommand(fields []string) {
 			fmt.Println("ERROR: Only the leader can handle rainstorm commands")
 			return
 		}
-		// RainStorm <Nstages> <Ntasks_per_stage> <op1_exe> <op1_args> … <opNstages_exe>
-		// <opNstages_args> <hydfs_src_directory> <hydfs_dest_filename> <exactly_once>
-		// <autoscale_enabled> <INPUT_RATE> <LW> <HW>
+		// rainstorm <Nstages> <Ntasks> <op1_exe> <op1_numargs> <op1_arg1> <op1_arg2> ... <op2_exe> <op2_numargs> <op2_arg1> ...
+		// <hydfs_source_file> <hydfs_dest_file> <exactly_once> <autoscale_enabled> <input_rate> [<lw> <hw>]
+
+		idx := 1
+
+		// Parse Nstages
 		var err error
-		Nstages, err = strconv.Atoi(fields[1])
+		Nstages, err = strconv.Atoi(fields[idx])
 		if err != nil {
-			fmt.Printf("ERROR: %v\n", err)
+			fmt.Println("ERROR:", err)
 			return
 		}
-		NtasksPerStage, err = strconv.Atoi(fields[2])
+		idx++
+
+		NtasksPerStage, err = strconv.Atoi(fields[idx])
 		if err != nil {
-			fmt.Printf("ERROR: %v\n", err)
+			fmt.Println("ERROR:", err)
 			return
 		}
-		for i := 0; i < Nstages; i++ {
-			opPath := fields[3+i*2]
-			opArgs := fields[4+i*2]
+		idx++
+
+		for s := 0; s < Nstages; s++ {
+			// 1. Operator path
+			opPath := fields[idx]
+			idx++
+
+			// 2. Number of args for this operator
+			numArgs, err := strconv.Atoi(fields[idx])
+			if err != nil {
+				fmt.Printf("ERROR: invalid numArgs for stage %d: %v\n", s, err)
+				return
+			}
+			idx++
+
+			// 3. Read exactly numArgs args
+			args := fields[idx : idx+numArgs]
+			idx += numArgs
+
+			// 4. Join them into one space-separated string
+			opArgs := strings.Join(args, " ")
+
+			// 5. Save
 			OpPaths = append(OpPaths, opPath)
 			OpArgsList = append(OpArgsList, opArgs)
 		}
-		HyDFSSourceFile = fields[3+Nstages*2]
-		HyDFSDestFile = fields[4+Nstages*2]
-		ExactlyOnce, err = strconv.ParseBool(fields[5+Nstages*2])
+
+		HyDFSSourceFile = fields[idx]
+		idx++
+
+		HyDFSDestFile = fields[idx]
+		idx++
+
+		ExactlyOnce, err = strconv.ParseBool(fields[idx])
 		if err != nil {
-			fmt.Printf("ERROR: %v\n", err)
+			fmt.Println("ERROR:", err)
 			return
 		}
-		AutoScaleEnabled, err = strconv.ParseBool(fields[6+Nstages*2])
+		idx++
+
+		AutoScaleEnabled, err = strconv.ParseBool(fields[idx])
 		if err != nil {
-			fmt.Printf("ERROR: %v\n", err)
+			fmt.Println("ERROR:", err)
 			return
 		}
-		InputRate, err = strconv.Atoi(fields[7+Nstages*2])
+		idx++
+
+		InputRate, err = strconv.Atoi(fields[idx])
 		if err != nil {
-			fmt.Printf("ERROR: %v\n", err)
+			fmt.Println("ERROR:", err)
 			return
 		}
+		idx++
+
 		if AutoScaleEnabled {
-			LW, err = strconv.Atoi(fields[8+Nstages*2])
+			LW, err = strconv.Atoi(fields[idx])
 			if err != nil {
-				fmt.Printf("ERROR: %v\n", err)
+				fmt.Println("ERROR:", err)
 				return
 			}
-			HW, err = strconv.Atoi(fields[9+Nstages*2])
+			idx++
+
+			HW, err = strconv.Atoi(fields[idx])
 			if err != nil {
-				fmt.Printf("ERROR: %v\n", err)
+				fmt.Println("ERROR:", err)
 				return
 			}
+			idx++
 		}
 		go startRainStorm()
 
@@ -442,13 +481,14 @@ func handleCommand(fields []string) {
 func printUsage() {
 	fmt.Println("Enter commands")
 	fmt.Println("\nAvailable commands:")
-	fmt.Println("  hydfs_list_mem_ids")
-	fmt.Println("  hydfs_list_self")
-	fmt.Println("  hydfs_create <localfile> <hydfsfile>")
-	fmt.Println("  hydfs_append <localfile> <hydfsfile>")
-	fmt.Println("  hydfs_get <hydfsfile> <localfile>")
-	fmt.Println("  hydfs_merge <hydfsfile>")
-	fmt.Println("  hydfs_ls <hydfsfile>")
+	// fmt.Println("  hydfs_list_mem_ids")
+	// fmt.Println("  hydfs_list_self")
+	// fmt.Println("  hydfs_create <localfile> <hydfsfile>")
+	// fmt.Println("  hydfs_append <localfile> <hydfsfile>")
+	// fmt.Println("  hydfs_get <hydfsfile> <localfile>")
+	// fmt.Println("  hydfs_merge <hydfsfile>")
+	// fmt.Println("  hydfs_ls <hydfsfile>")
+	fmt.Println("  rainstorm <Nstages> <Ntasks> <op1_exe> <op1_numargs> <op1_arg1> <op1_arg2> ... <op2_exe> <op2_numargs> <op2_arg1> ... <hydfs_source_file> <hydfs_dest_file> <exactly_once> <autoscale_enabled> <input_rate> [<lw> <hw>]")
 	fmt.Print(">> ")
 }
 

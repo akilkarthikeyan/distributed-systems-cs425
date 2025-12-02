@@ -6,7 +6,9 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"log"
 	"net"
+	"os"
 	"os/exec"
 	"strings"
 )
@@ -68,6 +70,18 @@ func listenUDP() {
 }
 
 func main() {
+	pid := os.Getpid()
+	logFile := fmt.Sprintf("../logs/task.%d.log", pid)
+
+	os.MkdirAll("../logs", 0755)
+	f, err := os.OpenFile(logFile, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
+	if err != nil {
+		fmt.Printf("log file open error: %v", err)
+		return
+	}
+	defer f.Close()
+	log.SetOutput(f)
+
 	flag.StringVar(&opPath, "opPath", "", "Path to the external op_exe executable.")
 	flag.StringVar(&opArgsString, "opArgs", "", "Space-separated arguments for the op_exe.")
 	flag.StringVar(&opTypeStr, "opType", "", "Type of operator (Source, Filter, Sink, etc.).")
@@ -77,7 +91,7 @@ func main() {
 	flag.StringVar(&hydfsSourceFile, "hydfsSourceFile", "", "HyDFS source file.")
 	flag.StringVar(&hydfsDestFile, "hydfsDestFile", "", "HyDFS destination file.")
 
-	flag.IntVar(&port, "port", 0, "The unique network port for this task.")
+	flag.IntVar(&port, "port", 9001, "The unique network port for this task.")
 
 	flag.BoolVar(&autoScaleEnabled, "autoscaleEnabled", false, "Flag to enable auto-scaling.")
 	flag.IntVar(&lw, "lw", 0, "Low watermark for autoscaling.")
@@ -107,8 +121,6 @@ func main() {
 	defer stdinPipe.Close()
 	defer cmd.Wait()
 
-	// Start the operator process
-	cmd.Start()
 	inputWriter = bufio.NewWriter(stdinPipe)
 
 	go startOutputReader(stdoutPipe)
@@ -116,12 +128,12 @@ func main() {
 	// Listen for UDP messages
 	listenAddr, err := net.ResolveUDPAddr("udp", fmt.Sprintf(":%d", port))
 	if err != nil {
-		fmt.Printf("resolve listenAddr error: %v", err)
+		log.Printf("resolve listenAddr error: %v", err)
 		return
 	}
 	udpConn, err = net.ListenUDP("udp", listenAddr)
 	if err != nil {
-		fmt.Printf("udp error: %v", err)
+		log.Printf("udp error: %v", err)
 	}
 	defer udpConn.Close()
 

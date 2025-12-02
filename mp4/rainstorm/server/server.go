@@ -18,7 +18,7 @@ var udpConn *net.UDPConn
 var portList []int
 var portMutex sync.Mutex
 
-const taskExePath = "../task/task"
+const taskExePath = "../bin/task"
 
 func popPort() (int, error) {
 	portMutex.Lock()
@@ -131,7 +131,7 @@ func handleMessage(msg *Message, encoder *json.Encoder) { // encoder can only be
 		encoder.Encode(ackMsg)
 		// Remove later
 		reqPayload := SpawnTaskRequestPayload{
-			OpPath:           "identity",
+			OpPath:           "../bin/identity",
 			OpArgs:           []string{"arg1", "arg2"},
 			OpType:           string(OtherOp),
 			AutoScaleEnabled: false,
@@ -327,7 +327,8 @@ func printUsage() {
 }
 
 func main() {
-	f, err := os.OpenFile("server.log", os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
+	os.MkdirAll("../logs", 0755)
+	f, err := os.OpenFile("../logs/server.log", os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
 	if err != nil {
 		fmt.Printf("log file open error: %v", err)
 		return

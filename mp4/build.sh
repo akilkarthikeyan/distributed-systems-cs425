@@ -1,5 +1,5 @@
 #!/bin/bash
 set -e
-go build -o operators/identity/identity operators/identity/identity.go
-mv operators/identity/identity rainstorm/task/identity
-go build -o rainstorm/task/task rainstorm/task/task.go rainstorm/task/types.go
+mkdir -p rainstorm/bin
+go build -o rainstorm/bin/identity rainstorm/operators/identity/identity.go
+go build -o rainstorm/bin/task rainstorm/task/task.go rainstorm/task/types.go

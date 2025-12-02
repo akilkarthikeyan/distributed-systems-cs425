@@ -105,6 +105,9 @@ func main() {
 
 	flag.BoolVar(&exactlyOnce, "exactlyOnce", false, "Flag to enable exactly-once processing.")
 
+	log.Printf("Config - opPath: %q, opArgs: %q, opType: %q, stage: %d, taskIndex: %d, inputRate: %d, hydfsSourceFile: %q, hydfsDestFile: %q, port: %d, autoscaleEnabled: %t, lw: %d, hw: %d, exactlyOnce: %t\n",
+		opPath, opArgsString, opTypeStr, stage, taskIndex, inputRate, hydfsSourceFile, hydfsDestFile, port, autoScaleEnabled, lw, hw, exactlyOnce)
+
 	flag.Parse()
 
 	// Parse opType
@@ -157,7 +160,7 @@ func startOutputReader(stdoutPipe io.Reader) {
 	scanner := bufio.NewScanner(stdoutPipe)
 	for scanner.Scan() {
 		outputTuple := scanner.Text()
-		fmt.Println("Processed Output:", outputTuple)
+		log.Println("Processed Output:", outputTuple)
 	}
 }
 

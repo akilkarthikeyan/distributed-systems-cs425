@@ -130,22 +130,6 @@ func handleMessage(msg *Message, encoder *json.Encoder) { // encoder can only be
 			From:        &SelfNode,
 		}
 		encoder.Encode(ackMsg)
-		// Remove later
-		reqPayload := SpawnTaskRequestPayload{
-			OpPath:           "../bin/identity",
-			OpArgs:           "arg1 arg2",
-			OpType:           string(OtherOp),
-			AutoScaleEnabled: false,
-			ExactlyOnce:      false,
-		}
-		payloadBytes, _ := json.Marshal(reqPayload)
-		reqMsg := &Message{
-			MessageType: SpawnTaskRequest,
-			From:        &SelfNode,
-			Payload:     payloadBytes,
-		}
-		response, _ := sendTCP(GetProcessAddress(msg.From), reqMsg)
-		log.Printf("received spawn task response: %+v", response)
 
 	// TCP message
 	case SpawnTaskRequest:

@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 )
 
 var udpConn *net.UDPConn
@@ -116,9 +117,21 @@ func handleTCPClient(conn net.Conn) {
 }
 
 func handleMessage(msg *Message, encoder *json.Encoder) { // encoder can only be present for TCP messages
-	log.Printf("recv %s from %s %s", msg.MessageType, msg.From.WhoAmI, GetProcessAddress(msg.From))
+	log.Printf("[INFO] recv %s from %s %s\n", msg.MessageType, msg.From.WhoAmI, GetProcessAddress(msg.From))
 
 	switch msg.MessageType {
+	// UDP message
+	case HeartBeat:
+		var payload HeartBeatPayload
+		json.Unmarshal(msg.Payload, &payload)
+		taskKey := GetTaskKey(payload.Stage, payload.TaskIndex)
+		taskInfo, exists := Tasks[taskKey]
+		if !exists {
+			return
+		}
+		taskInfo.LastUpdated = Tick
+		Tasks[taskKey] = taskInfo
+
 	// TCP message
 	case Join: // will recv join if you are the leader
 		// add node to list of nodes
@@ -143,8 +156,9 @@ func handleMessage(msg *Message, encoder *json.Encoder) { // encoder can only be
 			"--opType", payload.OpType,
 			"--stage", fmt.Sprintf("%d", payload.Stage),
 			"--taskIndex", fmt.Sprintf("%d", payload.TaskIndex),
-			"--autoscaleEnabled", fmt.Sprintf("%t", payload.AutoScaleEnabled),
-			"--exactlyOnce", fmt.Sprintf("%t", payload.ExactlyOnce),
+			// boolean flags
+			"--autoscaleEnabled=" + fmt.Sprintf("%t", payload.AutoScaleEnabled),
+			"--exactlyOnce=" + fmt.Sprintf("%t", payload.ExactlyOnce),
 		}
 
 		if payload.OpType == string(SourceOp) {
@@ -166,10 +180,9 @@ func handleMessage(msg *Message, encoder *json.Encoder) { // encoder can only be
 		}
 
 		respPayload := SpawnTaskResponsePayload{
-			Success: true,
-			PID:     cmd.Process.Pid,
-			IP:      SelfHost,
-			Port:    port,
+			PID:  cmd.Process.Pid,
+			IP:   SelfHost,
+			Port: port,
 		}
 		payloadBytes, _ := json.Marshal(respPayload)
 		respMsg := &Message{
@@ -224,15 +237,18 @@ func startRainStorm() {
 			json.Unmarshal(response.Payload, &respPayload)
 
 			Tasks[GetTaskKey(stage+1, taskIndex)] = TaskInfo{
+				Stage:       stage + 1,
+				TaskIndex:   taskIndex,
 				PID:         respPayload.PID,
 				TaskType:    opType,
 				IP:          respPayload.IP,
 				Port:        respPayload.Port,
 				NodeIP:      targetNode.IP,
+				NodePort:    targetNode.Port,
 				LastUpdated: 0, // this boy hasn't started updating yet
 			}
 
-			log.Printf("spawned %s task stage %d index %d at %s:%d with pid %d", reqPayload.OpType, stage+1, taskIndex, respPayload.IP, respPayload.Port, respPayload.PID)
+			log.Printf("[INFO] spawned %s task stage %d index %d at %s:%d with pid %d\n", reqPayload.OpType, stage+1, taskIndex, respPayload.IP, respPayload.Port, respPayload.PID)
 		}
 	}
 	// Spawn source task
@@ -263,7 +279,7 @@ func startRainStorm() {
 	// 	LastUpdated: 0,
 	// }
 
-	// log.Printf("spawned %s task stage %d index %d at %s:%d with pid %d", reqPayload.OpType, 0, 0, respPayload.IP, respPayload.Port, respPayload.PID)
+	// log.Printf("[INFO] spawned %s task stage %d index %d at %s:%d with pid %d\n", reqPayload.OpType, 0, 0, respPayload.IP, respPayload.Port, respPayload.PID)
 }
 
 func handleCommand(fields []string) {
@@ -558,7 +574,7 @@ func main() {
 		}
 		leaderAddr := fmt.Sprintf("%s:%d", LeaderHost, LeaderPort)
 		sendTCP(leaderAddr, joinMsg)
-		log.Printf("sent %s to %s", joinMsg.MessageType, leaderAddr)
+		log.Printf("[INFO] sent %s to %s\n", joinMsg.MessageType, leaderAddr)
 	}
 
 	reader := bufio.NewScanner(os.Stdin)
@@ -576,5 +592,62 @@ func main() {
 
 	if err := reader.Err(); err != nil && err != io.EOF {
 		fmt.Printf("Error reading from stdin: %v\n", err)
+	}
+}
+
+func tick(interval time.Duration) { // maintains time, respawns tasks if needed
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	for range ticker.C {
+		Tick++
+		for taskKey, taskInfo := range Tasks {
+			if Tick-taskInfo.LastUpdated > Tfail {
+				log.Printf("[FAIL] stage %d task %d at node %s pid %d failed\n", taskInfo.Stage, taskInfo.TaskIndex, taskInfo.NodeIP, taskInfo.PID)
+
+				// respawn task (assuming source task cannot fail per MP spec)
+				opPath := OpPaths[taskInfo.Stage-1]
+				opArgs := OpArgsList[taskInfo.Stage-1]
+				reqPayload := SpawnTaskRequestPayload{
+					OpPath:           opPath,
+					OpArgs:           opArgs,
+					OpType:           string(taskInfo.TaskType),
+					Stage:            taskInfo.Stage,
+					TaskIndex:        taskInfo.TaskIndex,
+					AutoScaleEnabled: AutoScaleEnabled,
+					ExactlyOnce:      ExactlyOnce,
+				}
+				if taskInfo.TaskType == SinkOp {
+					reqPayload.HyDFSDestFile = HyDFSDestFile
+				}
+				if AutoScaleEnabled {
+					reqPayload.LW = LW
+					reqPayload.HW = HW
+				}
+
+				payloadBytes, _ := json.Marshal(reqPayload)
+				reqMsg := &Message{
+					MessageType: SpawnTaskRequest,
+					From:        &SelfNode,
+					Payload:     payloadBytes,
+				}
+				targetNode := Nodes[AssignNode(taskInfo.Stage, taskInfo.TaskIndex, len(Nodes))]
+				response, _ := sendTCP(GetProcessAddress(&targetNode), reqMsg)
+				var respPayload SpawnTaskResponsePayload
+				json.Unmarshal(response.Payload, &respPayload)
+
+				Tasks[taskKey] = TaskInfo{
+					Stage:       taskInfo.Stage,
+					TaskIndex:   taskInfo.TaskIndex,
+					PID:         respPayload.PID,
+					TaskType:    taskInfo.TaskType,
+					IP:          respPayload.IP,
+					Port:        respPayload.Port,
+					NodeIP:      targetNode.IP,
+					NodePort:    targetNode.Port,
+					LastUpdated: Tick,
+				}
+			}
+		}
 	}
 }

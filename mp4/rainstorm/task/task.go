@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -11,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"time"
 )
 
 var inputWriter *bufio.Writer
@@ -40,10 +42,6 @@ var (
 	exactlyOnce bool
 )
 
-func handleMessage(msg *Message, inputWriter *bufio.Writer) {
-
-}
-
 func sendUDP(addr *net.UDPAddr, msg *Message) {
 	data, err := json.Marshal(msg)
 	if err != nil {
@@ -70,6 +68,67 @@ func listenUDP() {
 		}
 		handleMessage(&msg, nil)
 	}
+}
+
+func sendTCP(addr string, msg *Message) (*Message, error) {
+	conn, err := net.Dial("tcp", addr)
+	if err != nil {
+		return nil, err
+	}
+	defer conn.Close()
+
+	decoder := json.NewDecoder(conn)
+	encoder := json.NewEncoder(conn)
+
+	// Send request
+	if err := encoder.Encode(msg); err != nil {
+		return nil, err
+	}
+
+	// Wait for response
+	var resp Message
+	if err := decoder.Decode(&resp); err != nil {
+		return nil, err
+	}
+
+	return &resp, nil
+}
+
+// I don't think we'll need this but just in case
+func listenTCP(ln net.Listener) {
+	for {
+		conn, err := ln.Accept()
+		if err != nil {
+			fmt.Printf("listen tcp accept error: %v", err)
+			continue
+		}
+		// Handle each client in a separate goroutine
+		go handleTCPClient(conn)
+	}
+}
+
+// I don't think we'll need this but just in case
+func handleTCPClient(conn net.Conn) {
+	defer conn.Close()
+	decoder := json.NewDecoder(conn)
+	encoder := json.NewEncoder(conn)
+
+	for {
+		var msg Message
+		if err := decoder.Decode(&msg); err != nil {
+			if errors.Is(err, io.EOF) {
+				// Connection closed by client, so return
+			} else {
+				fmt.Printf("handle tcp decode from %v error: %v\n", conn.RemoteAddr(), err)
+			}
+			return
+		}
+		handleMessage(&msg, encoder)
+	}
+}
+
+func handleMessage(msg *Message, encoder *json.Encoder) {
+
 }
 
 func main() {
@@ -105,9 +164,6 @@ func main() {
 
 	flag.BoolVar(&exactlyOnce, "exactlyOnce", false, "Flag to enable exactly-once processing.")
 
-	log.Printf("Config - opPath: %q, opArgs: %q, opType: %q, stage: %d, taskIndex: %d, inputRate: %d, hydfsSourceFile: %q, hydfsDestFile: %q, port: %d, autoscaleEnabled: %t, lw: %d, hw: %d, exactlyOnce: %t\n",
-		opPath, opArgsString, opTypeStr, stage, taskIndex, inputRate, hydfsSourceFile, hydfsDestFile, port, autoScaleEnabled, lw, hw, exactlyOnce)
-
 	flag.Parse()
 
 	// Parse opType
@@ -135,6 +191,20 @@ func main() {
 
 	go startOutputReader(stdoutPipe)
 
+	// Get self hostname
+	hostname, err := os.Hostname()
+	if err != nil {
+		fmt.Printf("get hostname error: %v", err)
+		return
+	}
+	SelfHost = hostname
+
+	SelfTask = Process{
+		WhoAmI: Task,
+		IP:     SelfHost,
+		Port:   port,
+	}
+
 	// Listen for UDP messages
 	listenAddr, err := net.ResolveUDPAddr("udp", fmt.Sprintf(":%d", port))
 	if err != nil {
@@ -149,9 +219,11 @@ func main() {
 
 	go listenUDP()
 
-	// to test
-	sendTuple("OMMALE", inputWriter)
-	sendTuple("YOYO HONEY SINGH", inputWriter)
+	go heartbeat(TimeUnit)
+
+	// // to test
+	// sendTuple("OMMALE", inputWriter)
+	// sendTuple("YOYO HONEY SINGH", inputWriter)
 
 	select {}
 }
@@ -167,6 +239,33 @@ func startOutputReader(stdoutPipe io.Reader) {
 func sendTuple(tuple string, inputWriter *bufio.Writer) {
 	fmt.Fprintf(inputWriter, "%s\n", tuple)
 	inputWriter.Flush()
+}
+
+func heartbeat(interval time.Duration) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	leaderAddr, err := net.ResolveUDPAddr("udp", fmt.Sprintf("%s:%d", LeaderHost, LeaderPort))
+	if err != nil {
+		log.Printf("heartbeat resolve leader addr error: %v\n", err)
+		return
+	}
+
+	heartBeatPayload := HeartBeatPayload{
+		Stage:     stage,
+		TaskIndex: taskIndex,
+	}
+	payloadBytes, _ := json.Marshal(heartBeatPayload)
+
+	for {
+		<-ticker.C
+		msg := &Message{
+			MessageType: HeartBeat,
+			From:        &SelfTask,
+			Payload:     payloadBytes,
+		}
+		sendUDP(leaderAddr, msg)
+	}
 }
 
 // TODO: send heartbeat to leader periodically

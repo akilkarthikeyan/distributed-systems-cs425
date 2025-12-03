@@ -5,18 +5,26 @@ import (
 	"time"
 )
 
-type MessageType string
+const (
+	SelfPort   = 9000
+	LeaderHost = "fa25-cs425-9501.cs.illinois.edu"
+	LeaderPort = 9000
+	Tfail      = 5
+	TimeUnit   = time.Second
+)
 
-var SelfHost string
-var SelfNode Process
+// Message types
+type MessageType string
 
 const (
 	Join              MessageType = "join"
 	Ack               MessageType = "ack"
 	SpawnTaskRequest  MessageType = "spawn_task_request"
 	SpawnTaskResponse MessageType = "spawn_task_response"
+	HeartBeat         MessageType = "heartbeat"
 )
 
+// Process types (node vs task)
 type ProcessType string
 
 const (
@@ -24,6 +32,7 @@ const (
 	Task ProcessType = "task"
 )
 
+// Operation types for tasks
 type OpType string
 
 const (
@@ -32,13 +41,17 @@ const (
 	OtherOp  OpType = "other"
 )
 
+// Process identifies a node or task endpoint
 type Process struct {
 	WhoAmI ProcessType `json:"whoAmI"`
 	IP     string      `json:"ip"`
 	Port   int         `json:"port"`
 }
 
+// TaskInfo holds metadata about a task
 type TaskInfo struct {
+	Stage       int    `json:"stage"`
+	TaskIndex   int    `json:"taskIndex"`
 	PID         int    `json:"pid"`
 	TaskType    OpType `json:"taskType"`
 	IP          string `json:"ip"`
@@ -48,19 +61,18 @@ type TaskInfo struct {
 	LastUpdated int    `json:"lastUpdated"`
 }
 
+// Message is the generic envelope used between processes
 type Message struct {
 	MessageType MessageType     `json:"messageType"`
 	From        *Process        `json:"self,omitempty"`
 	Payload     json.RawMessage `json:"payload,omitempty"`
 }
 
-const (
-	SelfPort   = 9000
-	LeaderHost = "fa25-cs425-9501.cs.illinois.edu"
-	LeaderPort = 9000
-	Tfail      = 5
-	TimeUnit   = time.Second
-)
+// Payloads for specific message types
+type HeartBeatPayload struct {
+	Stage     int `json:"stage"`
+	TaskIndex int `json:"taskIndex"`
+}
 
 type AckPayload struct {
 	TupleID string `json:"tupleID"`
@@ -95,14 +107,20 @@ type SpawnTaskResponsePayload struct {
 	// PID
 	// IP
 	// Port
-	Success bool   `json:"success"`
-	PID     int    `json:"pid"`
-	IP      string `json:"ip"`
-	Port    int    `json:"port"`
+	PID  int    `json:"pid"`
+	IP   string `json:"ip"`
+	Port int    `json:"port"`
 }
 
-// Used if this process is the leader
+// Global state for this process
+var SelfHost string
+var SelfNode Process
+var Tick int
 
+var Nodes []Process
+var Tasks map[string]TaskInfo // Key is "stage_taskIndex"
+
+// Leader / application configuration (used if this process is the leader)
 var Nstages int
 var NtasksPerStage int
 var OpPaths []string
@@ -114,6 +132,3 @@ var LW int
 var HW int
 var HyDFSSourceFile string
 var HyDFSDestFile string
-
-var Nodes []Process
-var Tasks map[string]TaskInfo // Key is "stage_taskIndex"

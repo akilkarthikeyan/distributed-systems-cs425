@@ -653,6 +653,8 @@ func tick(interval time.Duration) { // maintains time, respawns tasks if needed
 					NodePort:    targetNode.Port,
 					LastUpdated: Tick,
 				}
+
+				log.Printf("[INFO] respawned %s task stage %d index %d at %s:%d with pid %d\n", reqPayload.OpType, reqPayload.Stage, reqPayload.TaskIndex, respPayload.IP, respPayload.Port, respPayload.PID)
 			}
 		}
 	}

@@ -245,7 +245,7 @@ func startRainStorm() {
 				Port:        respPayload.Port,
 				NodeIP:      targetNode.IP,
 				NodePort:    targetNode.Port,
-				LastUpdated: 0, // this boy hasn't started updating yet
+				LastUpdated: Tick,
 			}
 
 			log.Printf("[INFO] spawned %s task stage %d index %d at %s:%d with pid %d\n", reqPayload.OpType, stage+1, taskIndex, respPayload.IP, respPayload.Port, respPayload.PID)
@@ -276,7 +276,7 @@ func startRainStorm() {
 	// 	IP:          respPayload.IP,
 	// 	Port:        respPayload.Port,
 	// 	NodeIP:      targetNode.IP,
-	// 	LastUpdated: 0,
+	// 	LastUpdated: Tick,
 	// }
 
 	// log.Printf("[INFO] spawned %s task stage %d index %d at %s:%d with pid %d\n", reqPayload.OpType, 0, 0, respPayload.IP, respPayload.Port, respPayload.PID)
@@ -566,8 +566,10 @@ func main() {
 
 	go listenTCP(tcpLn)
 
+	AmILeader = (SelfHost == LeaderHost && SelfPort == LeaderPort)
+
 	// Send join msg to leader process if you are not the leader
-	if !(SelfHost == LeaderHost && SelfPort == LeaderPort) {
+	if !AmILeader {
 		joinMsg := &Message{
 			MessageType: Join,
 			From:        &SelfNode,
@@ -575,6 +577,10 @@ func main() {
 		leaderAddr := fmt.Sprintf("%s:%d", LeaderHost, LeaderPort)
 		sendTCP(leaderAddr, joinMsg)
 		log.Printf("[INFO] sent %s to %s\n", joinMsg.MessageType, leaderAddr)
+	}
+
+	if AmILeader {
+		go tick(TimeUnit)
 	}
 
 	reader := bufio.NewScanner(os.Stdin)

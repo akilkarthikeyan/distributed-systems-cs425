@@ -121,6 +121,7 @@ var Nodes []Process
 var Tasks map[string]TaskInfo // Key is "stage_taskIndex"
 
 // Leader / application configuration (used if this process is the leader)
+var AmILeader bool
 var Nstages int
 var NtasksPerStage int
 var OpPaths []string

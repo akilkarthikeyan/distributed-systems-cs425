@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -1243,7 +1244,14 @@ func main() {
 		}
 	}()
 
-	select {}
+	scanner := bufio.NewScanner(os.Stdin)
+	for scanner.Scan() {
+		line := scanner.Text()
+		handleCommand(line)
+	}
+	if err := scanner.Err(); err != nil {
+		log.Printf("stdin error: %v\n", err)
+	}
 }
 
 func handleCommand(line string) {

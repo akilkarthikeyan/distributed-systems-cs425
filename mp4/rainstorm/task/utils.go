@@ -37,6 +37,7 @@ func NewHyDFSFlusher(interval time.Duration, hyDFSFilename string) *HyDFSFlusher
 	temp := fmt.Sprintf("%s/%s", filesDir, hyDFSFilename)
 
 	// Create an empty file locally so you can send it
+	os.MkdirAll(filesDir, 0755) // creates directories if missing
 	os.WriteFile(temp, []byte{}, 0644)
 
 	// POST /create

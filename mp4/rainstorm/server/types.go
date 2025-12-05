@@ -21,6 +21,8 @@ const (
 	Ack               MessageType = "ack"
 	SpawnTaskRequest  MessageType = "spawn_task_request"
 	SpawnTaskResponse MessageType = "spawn_task_response"
+	StartTransfer     MessageType = "startTransfer"
+	ChangeTransfer    MessageType = "changeTransfer"
 	HeartBeat         MessageType = "heartbeat"
 )
 
@@ -74,10 +76,6 @@ type HeartBeatPayload struct {
 	TaskIndex int `json:"taskIndex"`
 }
 
-type AckPayload struct {
-	TupleID string `json:"tupleID"`
-}
-
 type SpawnTaskRequestPayload struct {
 	// opExe path
 	// opExe args
@@ -110,6 +108,10 @@ type SpawnTaskResponsePayload struct {
 	PID  int    `json:"pid"`
 	IP   string `json:"ip"`
 	Port int    `json:"port"`
+}
+
+type TransferPayload struct {
+	Successors map[int]Process `json:"successors"`
 }
 
 // Global state for this process

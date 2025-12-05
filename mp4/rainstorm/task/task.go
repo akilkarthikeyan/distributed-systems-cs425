@@ -151,6 +151,15 @@ func handleMessage(msg *Message, encoder *json.Encoder) {
 			log.Printf("[INFO] updated successors")
 		}
 		// TODO: if task is source, start sending tuples
+		if opType == SourceOp {
+			filesDir := "/home/anandan3/g95/mp4/rainstorm/files"
+			req := GetHttpRequest{HyDFSFilename: hydfsSourceFile, LocalFilename: fmt.Sprintf("%s/%s", filesDir, hydfsSourceFile)}
+			_, err := SendPostRequest("/get", req)
+			if err != nil {
+				log.Printf("error getting source file from HyDFS: %v", err)
+			}
+			go streamTuples(StreamTimeUnit)
+		}
 		encoder.Encode(&Message{
 			MessageType: Ack,
 			From:        &SelfTask,
@@ -312,17 +321,17 @@ func main() {
 
 	go listenUDP()
 
+	// Listen for TCP messages
+	tcpLn, err := net.Listen("tcp", fmt.Sprintf(":%d", port))
+	if err != nil {
+		fmt.Printf("tcp error: %v", err)
+		return
+	}
+
+	go listenTCP(tcpLn)
+
 	go heartbeat(HeartBeatTimeUnit)
 
-	if opType == SourceOp {
-		filesDir := "/home/anandan3/g95/mp4/rainstorm/files"
-		req := GetHttpRequest{HyDFSFilename: hydfsSourceFile, LocalFilename: fmt.Sprintf("%s/%s", filesDir, hydfsSourceFile)}
-		_, err = SendPostRequest("/get", req)
-		if err != nil {
-			log.Printf("error getting source file from HyDFS: %v", err)
-		}
-		go streamTuples(StreamTimeUnit)
-	}
 	if opType != SinkOp {
 		go forwardTuples(ForwardTimeUnit)
 	}

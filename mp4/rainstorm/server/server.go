@@ -260,34 +260,94 @@ func startRainStorm() {
 		}
 	}
 	// Spawn source task
-	// reqPayload := SpawnTaskRequestPayload{
-	// 	OpType:          string(SourceOp),
-	// 	Stage:           0,
-	// 	TaskIndex:       0,
-	// 	HyDFSSourceFile: HyDFSSourceFile,
-	// 	InputRate:       InputRate,
-	// }
-	// payloadBytes, _ := json.Marshal(reqPayload)
-	// reqMsg := &Message{
-	// 	MessageType: SpawnTaskRequest,
-	// 	From:        &SelfNode,
-	// 	Payload:     payloadBytes,
-	// }
-	// targetNode := Nodes[AssignNode(0, 0, len(Nodes))]
-	// response, _ := sendTCP(GetProcessAddress(&targetNode), reqMsg)
-	// var respPayload SpawnTaskResponsePayload
-	// json.Unmarshal(response.Payload, &respPayload)
+	reqPayload := SpawnTaskRequestPayload{
+		OpType:          string(SourceOp),
+		Stage:           0,
+		TaskIndex:       0,
+		HyDFSSourceFile: HyDFSSourceFile,
+		InputRate:       InputRate,
+	}
+	payloadBytes, _ := json.Marshal(reqPayload)
+	reqMsg := &Message{
+		MessageType: SpawnTaskRequest,
+		From:        &SelfNode,
+		Payload:     payloadBytes,
+	}
+	targetNode := Nodes[AssignNode(0, 0, len(Nodes))]
+	response, _ := sendTCP(GetProcessAddress(&targetNode), reqMsg)
+	var respPayload SpawnTaskResponsePayload
+	json.Unmarshal(response.Payload, &respPayload)
 
-	// Tasks[GetTaskKey(0, 0)] = TaskInfo{
-	// 	PID:         respPayload.PID,
-	// 	TaskType:    SourceOp,
-	// 	IP:          respPayload.IP,
-	// 	Port:        respPayload.Port,
-	// 	NodeIP:      targetNode.IP,
-	// 	LastUpdated: Tick,
-	// }
+	if Tasks[0] == nil {
+		Tasks[0] = make(map[int]TaskInfo)
+	}
 
-	// log.Printf("[INFO] spawned %s task stage %d index %d at %s:%d with pid %d\n", reqPayload.OpType, 0, 0, respPayload.IP, respPayload.Port, respPayload.PID)
+	Tasks[0][0] = TaskInfo{
+		Stage:       0,
+		TaskIndex:   0,
+		PID:         respPayload.PID,
+		TaskType:    SourceOp,
+		IP:          respPayload.IP,
+		Port:        respPayload.Port,
+		NodeIP:      targetNode.IP,
+		NodePort:    targetNode.Port,
+		LastUpdated: Tick,
+	}
+
+	log.Printf("[INFO] spawned %s task stage %d index %d at %s:%d with pid %d\n", reqPayload.OpType, 0, 0, respPayload.IP, respPayload.Port, respPayload.PID)
+
+	// Spawning over, now send successor info and start tasks, do this in reverse
+	for stage := Nstages - 1; stage >= 0; stage-- {
+		for taskIndex := 0; taskIndex < NtasksPerStage; taskIndex++ {
+			// prepare successor map
+			successors := make(map[int]Process)
+			if stage < Nstages-1 {
+				for succIndex := 0; succIndex < NtasksPerStage; succIndex++ {
+					succTaskInfo := Tasks[stage+2][succIndex] // +1 for 1-based stage, +1 for successor stage
+					successors[succIndex] = Process{
+						WhoAmI: Task,
+						IP:     succTaskInfo.IP,
+						Port:   succTaskInfo.Port,
+					}
+				}
+			}
+			transferPayload := TransferPayload{
+				Successors: successors,
+			}
+			payloadBytes, _ := json.Marshal(transferPayload)
+			transferMsg := &Message{
+				MessageType: StartTransfer,
+				From:        &SelfNode,
+				Payload:     payloadBytes,
+			}
+			taskInfo := Tasks[stage+1][taskIndex] // +1 for 1-based stage
+			taskAddr := fmt.Sprintf("%s:%d", taskInfo.IP, taskInfo.Port)
+			sendTCP(taskAddr, transferMsg)
+		}
+	}
+
+	// Now send startTransfer to source task
+	successors := make(map[int]Process)
+	for succIndex := 0; succIndex < NtasksPerStage; succIndex++ {
+		succTaskInfo := Tasks[1][succIndex] // stage 1 is first stage
+		successors[succIndex] = Process{
+			WhoAmI: Task,
+			IP:     succTaskInfo.IP,
+			Port:   succTaskInfo.Port,
+		}
+	}
+	transferPayload := TransferPayload{
+		Successors: successors,
+	}
+	payloadBytes, _ = json.Marshal(transferPayload)
+	transferMsg := &Message{
+		MessageType: StartTransfer,
+		From:        &SelfNode,
+		Payload:     payloadBytes,
+	}
+	sourceTaskInfo := Tasks[0][0]
+	sourceTaskAddr := fmt.Sprintf("%s:%d", sourceTaskInfo.IP, sourceTaskInfo.Port)
+	sendTCP(sourceTaskAddr, transferMsg)
 }
 
 func handleCommand(fields []string) {

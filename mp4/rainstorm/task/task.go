@@ -105,12 +105,11 @@ func sendTCP(addr string, msg *Message) (*Message, error) {
 	return &resp, nil
 }
 
-// I don't think we'll need this but just in case
 func listenTCP(ln net.Listener) {
 	for {
 		conn, err := ln.Accept()
 		if err != nil {
-			fmt.Printf("listen tcp accept error: %v", err)
+			log.Printf("listen tcp accept error: %v", err)
 			continue
 		}
 		// Handle each client in a separate goroutine
@@ -118,7 +117,6 @@ func listenTCP(ln net.Listener) {
 	}
 }
 
-// I don't think we'll need this but just in case
 func handleTCPClient(conn net.Conn) {
 	defer conn.Close()
 	decoder := json.NewDecoder(conn)
@@ -130,7 +128,7 @@ func handleTCPClient(conn net.Conn) {
 			if errors.Is(err, io.EOF) {
 				// Connection closed by client, so return
 			} else {
-				fmt.Printf("handle tcp decode from %v error: %v\n", conn.RemoteAddr(), err)
+				log.Printf("handle tcp decode from %v error: %v\n", conn.RemoteAddr(), err)
 			}
 			return
 		}
@@ -266,6 +264,9 @@ func main() {
 
 	flag.Parse()
 
+	// Initialize processedButNotAcked !!!
+	processedButNotAcked = make(map[string]string)
+
 	// Parse opType
 	switch strings.ToLower(opTypeStr) {
 	case "source":
@@ -400,6 +401,10 @@ func forwardTuples(interval time.Duration) {
 
 	for {
 		<-ticker.C
+
+		if len(successors) == 0 { // no successors
+			continue
+		}
 
 		mu.Lock()
 		// Make a copy to minimize lock time

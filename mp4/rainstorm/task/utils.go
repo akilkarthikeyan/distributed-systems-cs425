@@ -23,6 +23,7 @@ type HyDFSFlusher struct {
 	lines         []string
 	interval      time.Duration
 	hyDFSFilename string
+	created       bool
 }
 
 func NewHyDFSFlusher(interval time.Duration, hyDFSFilename string) *HyDFSFlusher {
@@ -30,6 +31,25 @@ func NewHyDFSFlusher(interval time.Duration, hyDFSFilename string) *HyDFSFlusher
 		lines:         make([]string, 0),
 		interval:      interval,
 		hyDFSFilename: hyDFSFilename,
+	}
+
+	filesDir := "/home/anandan3/g95/mp4/rainstorm/files"
+	temp := fmt.Sprintf("%s/%s", filesDir, hyDFSFilename)
+
+	// Create an empty file locally so you can send it
+	os.WriteFile(temp, []byte{}, 0644)
+
+	// POST /create
+	req := HyDFSFileRequest{
+		LocalFilename: temp,
+		HyDFSFilename: hyDFSFilename,
+	}
+
+	_, err := SendPostRequest("/create", req)
+	if err != nil {
+		log.Printf("HyDFSFlusher: failed to create file %s: %v", hyDFSFilename, err)
+	} else {
+		f.created = true
 	}
 
 	// Start background goroutine

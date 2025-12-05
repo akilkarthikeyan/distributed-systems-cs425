@@ -356,7 +356,6 @@ func startRainStorm() {
 	if err != nil {
 		fmt.Printf("TCP starttransfer to sourceTask error: %v\n", err)
 	}
-	fmt.Printf("TCP starttransfer to sourceTask sent!\n")
 }
 
 func handleCommand(fields []string) {

@@ -137,7 +137,11 @@ func handleTCPClient(conn net.Conn) {
 }
 
 func handleMessage(msg *Message, encoder *json.Encoder) {
-	log.Printf("[INFO] recv %s from %s %s\n", msg.MessageType, msg.From.WhoAmI, GetProcessAddress(msg.From))
+	if msg.MessageType == Ack {
+	} else if msg.MessageType == Tuple {
+	} else {
+		log.Printf("[INFO] recv %s from %s %s\n", msg.MessageType, msg.From.WhoAmI, GetProcessAddress(msg.From))
+	}
 
 	switch msg.MessageType {
 	// TCP message
@@ -181,6 +185,8 @@ func handleMessage(msg *Message, encoder *json.Encoder) {
 		var payload TuplePayload
 		json.Unmarshal(msg.Payload, &payload)
 
+		log.Printf("[INFO] recv tuple key=%s from %s %s\n", payload.Key, msg.From.WhoAmI, GetProcessAddress(msg.From))
+
 		targetAddr, err := net.ResolveUDPAddr("udp", fmt.Sprintf("%s:%d", msg.From.IP, msg.From.Port))
 		if err != nil {
 			log.Printf("resolve target addr error: %v\n", err)
@@ -208,11 +214,14 @@ func handleMessage(msg *Message, encoder *json.Encoder) {
 			Payload:     payloadBytes,
 		}
 		sendUDP(targetAddr, msg)
+		log.Printf("[INFO] send ack for tuple key=%s to %s %s\n", payload.Key, msg.From.WhoAmI, GetProcessAddress(msg.From))
 
 	// UDP message
 	case Ack:
 		var payload AckPayload
 		json.Unmarshal(msg.Payload, &payload)
+
+		log.Printf("[INFO] recv ack for tuple key=%s from %s %s\n", payload.Key, msg.From.WhoAmI, GetProcessAddress(msg.From))
 
 		mu.Lock()
 		defer mu.Unlock()
@@ -436,6 +445,7 @@ func forwardTuples(interval time.Duration) {
 					continue
 				}
 				sendUDP(targetAddr, msg)
+				log.Printf("[INFO] send tuple key=%s to %s\n", key, GetProcessAddress(&successor))
 			}
 		}
 	}

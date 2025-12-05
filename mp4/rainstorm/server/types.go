@@ -118,7 +118,7 @@ var SelfNode Process
 var Tick int
 
 var Nodes []Process
-var Tasks map[string]TaskInfo // Key is "stage_taskIndex"
+var Tasks map[int]map[int]TaskInfo // stage -> taskIndex -> TaskInfo
 
 // Leader / application configuration (used if this process is the leader)
 var AmILeader bool

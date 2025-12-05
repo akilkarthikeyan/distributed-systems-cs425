@@ -124,13 +124,16 @@ func handleMessage(msg *Message, encoder *json.Encoder) { // encoder can only be
 	case HeartBeat:
 		var payload HeartBeatPayload
 		json.Unmarshal(msg.Payload, &payload)
-		taskKey := GetTaskKey(payload.Stage, payload.TaskIndex)
-		taskInfo, exists := Tasks[taskKey]
+		tasksByStage, exists := Tasks[payload.Stage]
+		if !exists {
+			return
+		}
+		taskInfo, exists := tasksByStage[payload.TaskIndex]
 		if !exists {
 			return
 		}
 		taskInfo.LastUpdated = Tick
-		Tasks[taskKey] = taskInfo
+		Tasks[payload.Stage][payload.TaskIndex] = taskInfo
 
 	// TCP message
 	case Join: // will recv join if you are the leader
@@ -236,7 +239,12 @@ func startRainStorm() {
 			var respPayload SpawnTaskResponsePayload
 			json.Unmarshal(response.Payload, &respPayload)
 
-			Tasks[GetTaskKey(stage+1, taskIndex)] = TaskInfo{
+			// Check if the inner map for 'stage' exists, if not, initialize it
+			if Tasks[stage+1] == nil {
+				Tasks[stage+1] = make(map[int]TaskInfo)
+			}
+
+			Tasks[stage+1][taskIndex] = TaskInfo{
 				Stage:       stage + 1,
 				TaskIndex:   taskIndex,
 				PID:         respPayload.PID,
@@ -526,8 +534,8 @@ func main() {
 	}
 	SelfHost = hostname
 
-	// Initialize Tasks map
-	Tasks = make(map[string]TaskInfo)
+	// Initialize top-level map
+	Tasks = make(map[int]map[int]TaskInfo)
 
 	// Add yourself to list of nodes
 	SelfNode = Process{
@@ -607,11 +615,13 @@ func tick(interval time.Duration) { // maintains time, respawns tasks if needed
 
 	for range ticker.C {
 		Tick++
-		for taskKey, taskInfo := range Tasks {
-			if Tick-taskInfo.LastUpdated > Tfail {
-				log.Printf("[FAIL] stage %d task %d at node %s pid %d failed\n", taskInfo.Stage, taskInfo.TaskIndex, taskInfo.NodeIP, taskInfo.PID)
 
-				// respawn task (assuming source task cannot fail per MP spec)
+		for stageKey, tasksByStage := range Tasks {
+			for taskIndex, taskInfo := range tasksByStage {
+				if Tick-taskInfo.LastUpdated <= Tfail {
+					continue
+				} // task is alive
+				log.Printf("[FAIL] stage %d task %d at node %s pid %d failed\n", taskInfo.Stage, taskInfo.TaskIndex, taskInfo.NodeIP, taskInfo.PID)
 				opPath := OpPaths[taskInfo.Stage-1]
 				opArgs := OpArgsList[taskInfo.Stage-1]
 				reqPayload := SpawnTaskRequestPayload{
@@ -623,6 +633,7 @@ func tick(interval time.Duration) { // maintains time, respawns tasks if needed
 					AutoScaleEnabled: AutoScaleEnabled,
 					ExactlyOnce:      ExactlyOnce,
 				}
+
 				if taskInfo.TaskType == SinkOp {
 					reqPayload.HyDFSDestFile = HyDFSDestFile
 				}
@@ -641,8 +652,7 @@ func tick(interval time.Duration) { // maintains time, respawns tasks if needed
 				response, _ := sendTCP(GetProcessAddress(&targetNode), reqMsg)
 				var respPayload SpawnTaskResponsePayload
 				json.Unmarshal(response.Payload, &respPayload)
-
-				Tasks[taskKey] = TaskInfo{
+				Tasks[stageKey][taskIndex] = TaskInfo{
 					Stage:       taskInfo.Stage,
 					TaskIndex:   taskInfo.TaskIndex,
 					PID:         respPayload.PID,

@@ -296,14 +296,16 @@ func startRainStorm() {
 
 	log.Printf("[INFO] spawned %s task stage %d index %d at %s:%d with pid %d\n", reqPayload.OpType, 0, 0, respPayload.IP, respPayload.Port, respPayload.PID)
 
+	time.Sleep(250 * time.Millisecond) // wait a bit for tasks to be ready
+
 	// Spawning over, now send successor info and start tasks, do this in reverse
-	for stage := Nstages - 1; stage >= 0; stage-- {
+	for stage := Nstages; stage >= 1; stage-- {
 		for taskIndex := 0; taskIndex < NtasksPerStage; taskIndex++ {
 			// prepare successor map
 			successors := make(map[int]Process)
-			if stage < Nstages-1 {
+			if stage < Nstages {
 				for succIndex := 0; succIndex < NtasksPerStage; succIndex++ {
-					succTaskInfo := Tasks[stage+2][succIndex] // +1 for 1-based stage, +1 for successor stage
+					succTaskInfo := Tasks[stage+1][succIndex]
 					successors[succIndex] = Process{
 						WhoAmI: Task,
 						IP:     succTaskInfo.IP,
@@ -320,9 +322,12 @@ func startRainStorm() {
 				From:        &SelfNode,
 				Payload:     payloadBytes,
 			}
-			taskInfo := Tasks[stage+1][taskIndex] // +1 for 1-based stage
+			taskInfo := Tasks[stage][taskIndex]
 			taskAddr := fmt.Sprintf("%s:%d", taskInfo.IP, taskInfo.Port)
-			sendTCP(taskAddr, transferMsg)
+			_, err := sendTCP(taskAddr, transferMsg)
+			if err != nil {
+				fmt.Printf("TCP starttransfer to %s error: %v\n", taskAddr, err)
+			}
 		}
 	}
 
@@ -347,7 +352,11 @@ func startRainStorm() {
 	}
 	sourceTaskInfo := Tasks[0][0]
 	sourceTaskAddr := fmt.Sprintf("%s:%d", sourceTaskInfo.IP, sourceTaskInfo.Port)
-	sendTCP(sourceTaskAddr, transferMsg)
+	_, err := sendTCP(sourceTaskAddr, transferMsg)
+	if err != nil {
+		fmt.Printf("TCP starttransfer to sourceTask error: %v\n", err)
+	}
+	fmt.Printf("TCP starttransfer to sourceTask sent!\n")
 }
 
 func handleCommand(fields []string) {

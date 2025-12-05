@@ -442,6 +442,7 @@ func streamTuples(interval time.Duration) {
 	defer file.Close()
 
 	scanner := bufio.NewScanner(file)
+	lineNumber := 0
 
 	for {
 		<-ticker.C
@@ -456,10 +457,13 @@ func streamTuples(interval time.Duration) {
 				return
 			}
 
+			lineNumber++
 			line := scanner.Text()
 			// processed.Store(line, line)
+			key := fmt.Sprintf("%s_%d", hydfsSourceFile, lineNumber)
+
 			mu.Lock()
-			processedButNotAcked[line] = line
+			processedButNotAcked[key] = line
 			mu.Unlock()
 		}
 	}

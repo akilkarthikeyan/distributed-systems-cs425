@@ -42,16 +42,21 @@ var (
 
 	exactlyOnce bool
 
-	processed            sync.Map          // For exactly-once processing
-	acked                sync.Map          // For exactly-once processing
+	Received  sync.Map // For exactly-once processing
+	processed sync.Map // For exactly-once processing
+	acked     sync.Map // For exactly-once processing
+
+	Stored sync.Map // to keep track of what has been stored in persistent storage
+
 	processedButNotAcked map[string]string // processed - acked
 	mu                   sync.Mutex        // protects processedButNotAcked
 
-	successors  map[int]Process // key: taskIndex, only present if opType is not SinkOp
-	sinkFlusher *HyDFSFlusher
+	successors   map[int]Process // key: taskIndex, only present if opType is not SinkOp
+	sinkFlusher  *HyDFSFlusher
+	ackedFlusher *HyDFSFlusher
 )
 
-const delimiter = "&"
+const Delimiter = "&"
 
 func sendUDP(addr *net.UDPAddr, msg *Message) {
 	data, err := json.Marshal(msg)
@@ -152,7 +157,6 @@ func handleMessage(msg *Message, encoder *json.Encoder) {
 			successors = payload.Successors
 			log.Printf("[INFO] updated successors")
 		}
-		// TODO: if task is source, start sending tuples
 		if opType == SourceOp {
 			filesDir := "/home/anandan3/g95/mp4/rainstorm/files"
 			req := GetHttpRequest{HyDFSFilename: hydfsSourceFile, LocalFilename: fmt.Sprintf("%s/%s", filesDir, hydfsSourceFile)}
@@ -187,34 +191,83 @@ func handleMessage(msg *Message, encoder *json.Encoder) {
 
 		log.Printf("[INFO] recv tuple key=%s from %s %s\n", payload.Key, msg.From.WhoAmI, GetProcessAddress(msg.From))
 
-		targetAddr, err := net.ResolveUDPAddr("udp", fmt.Sprintf("%s:%d", msg.From.IP, msg.From.Port))
+		targetAddr, err := net.ResolveUDPAddr("udp", GetProcessAddress(msg.From))
 		if err != nil {
-			log.Printf("resolve target addr error: %v\n", err)
+			log.Printf("resolve target addr error for ACK: %v\n", err)
 			return
 		}
 
-		_, found := processed.Load(payload.Key)
-		if exactlyOnce && found {
-			// Already processed, skip
-		} else {
-			// Prepend with key
-			tuple := fmt.Sprintf("%s%s%s", payload.Key, delimiter, payload.Value)
-			processTuple(tuple, inputWriter)
+		if opPath == "../bin/aggregate" {
+			if exactlyOnce {
+				_, isReceived := Received.Load(payload.Key)
+				if isReceived {
+					payload := AckPayload{Key: payload.Key}
+					payloadBytes, _ := json.Marshal(payload)
+					ackMsg := &Message{
+						MessageType: Ack,
+						From:        &SelfTask,
+						Payload:     payloadBytes,
+					}
+					sendUDP(targetAddr, ackMsg)
+					log.Printf("[INFO] Sent ACK for tuple key=%s to task %s\n", payload.Key, GetProcessAddress(msg.From))
+				} else {
+					Received.Store(payload.Key, GetProcessAddress(msg.From))
+					tuple := fmt.Sprintf("%s%s%s", payload.Key, Delimiter, payload.Value)
+					processTuple(tuple, inputWriter)
+					payload := AckPayload{Key: payload.Key}
+					payloadBytes, _ := json.Marshal(payload)
+					ackMsg := &Message{
+						MessageType: Ack,
+						From:        &SelfTask,
+						Payload:     payloadBytes,
+					}
+					sendUDP(targetAddr, ackMsg)
+					log.Printf("[INFO] Sent ACK for tuple key=%s to task %s\n", payload.Key, GetProcessAddress(msg.From))
+				}
+			} else { // atleast once
+				tuple := fmt.Sprintf("%s%s%s", payload.Key, Delimiter, payload.Value)
+				processTuple(tuple, inputWriter)
+				payload := AckPayload{Key: payload.Key}
+				payloadBytes, _ := json.Marshal(payload)
+				ackMsg := &Message{
+					MessageType: Ack,
+					From:        &SelfTask,
+					Payload:     payloadBytes,
+				}
+				sendUDP(targetAddr, ackMsg)
+				log.Printf("[INFO] Sent ACK for tuple key=%s to task %s\n", payload.Key, GetProcessAddress(msg.From))
+			}
+		} else if opPath == "../bin/transform" || opPath == "../bin/identity" || opPath == "../bin/filter" {
+			Received.Store(payload.Key, GetProcessAddress(msg.From)) // for processedFlusher and ackedFlusher and startOutputReader
+			if exactlyOnce {
+				_, isStored := Stored.Load(payload.Key)
+				if isStored {
+					payload := AckPayload{Key: payload.Key}
+					payloadBytes, _ := json.Marshal(payload)
+					ackMsg := &Message{
+						MessageType: Ack,
+						From:        &SelfTask,
+						Payload:     payloadBytes,
+					}
+					sendUDP(targetAddr, ackMsg)
+					log.Printf("[INFO] Sent ACK for tuple key=%s to task %s\n", payload.Key, GetProcessAddress(msg.From))
+				} else {
+					_, isProcessed := processed.Load(payload.Key)
+					if isProcessed {
+						// do nothing
+					} else {
+						// process
+						tuple := fmt.Sprintf("%s%s%s", payload.Key, Delimiter, payload.Value)
+						processTuple(tuple, inputWriter)
+					}
+				}
+			} else {
+				// process
+				Received.Store(payload.Key, GetProcessAddress(msg.From))
+				tuple := fmt.Sprintf("%s%s%s", payload.Key, Delimiter, payload.Value)
+				processTuple(tuple, inputWriter)
+			}
 		}
-
-		ackPayload := AckPayload{
-			Key: payload.Key,
-		}
-		payloadBytes, _ := json.Marshal(ackPayload)
-
-		// Send ack back
-		msg := &Message{
-			MessageType: Ack,
-			From:        &SelfTask,
-			Payload:     payloadBytes,
-		}
-		sendUDP(targetAddr, msg)
-		log.Printf("[INFO] send ack for tuple key=%s to %s %s\n", payload.Key, msg.From.WhoAmI, GetProcessAddress(msg.From))
 
 	// UDP message
 	case Ack:
@@ -223,26 +276,53 @@ func handleMessage(msg *Message, encoder *json.Encoder) {
 
 		log.Printf("[INFO] recv ack for tuple key=%s from %s %s\n", payload.Key, msg.From.WhoAmI, GetProcessAddress(msg.From))
 
-		mu.Lock()
-		defer mu.Unlock()
-
 		if exactlyOnce {
-			value, found := processedButNotAcked[payload.Key]
+			mu.Lock()
+			_, found := processedButNotAcked[payload.Key]
 			if found {
-				acked.Store(payload.Key, value)
+				acked.Store(payload.Key, "")
+				// store in persistent storage
+				ackedFlusher.Append(payload.Key)
 				delete(processedButNotAcked, payload.Key)
 			}
+			mu.Unlock()
 		} else {
+			mu.Lock()
 			delete(processedButNotAcked, payload.Key)
+			mu.Unlock()
+
+			// send ACK back to original sender of tuple
+			targetAddrStr, ok := Received.Load(payload.Key)
+			if ok {
+				targetAddr, err := net.ResolveUDPAddr("udp", targetAddrStr.(string))
+				if err != nil {
+					log.Printf("resolve target addr error for ACK back to original sender: %v\n", err)
+					return
+				}
+				payload := &AckPayload{Key: payload.Key}
+				payloadBytes, _ := json.Marshal(payload)
+				ackMsg := &Message{
+					MessageType: Ack,
+					From:        &SelfTask,
+					Payload:     payloadBytes,
+				}
+				sendUDP(targetAddr, ackMsg)
+				log.Printf("[INFO] Sent ACK for tuple key=%s to task %s\n", payload.Key, targetAddrStr.(string))
+			}
 		}
 	}
 }
 
 func main() {
 	pid := os.Getpid()
-	logFile := fmt.Sprintf("../logs/task.%d.log", pid)
 
+	logFile := fmt.Sprintf("../logs/task.%d.log", pid)
 	os.MkdirAll("../logs", 0755)
+	filesDir := "/home/anandan3/g95/mp4/rainstorm/files"
+	os.MkdirAll(filesDir, 0755)
+	tempDir := "/home/anandan3/g95/mp4/rainstorm/temp"
+	os.MkdirAll(tempDir, 0755)
+
 	f, err := os.OpenFile(logFile, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
 	if err != nil {
 		// fmt.Printf("log file open error: %v", err)
@@ -275,6 +355,7 @@ func main() {
 
 	// Initialize processedButNotAcked !!!
 	processedButNotAcked = make(map[string]string)
+	ackedFlusher = NewHyDFSFlusher(FlushInterval, fmt.Sprintf("task_%d_stage_%d_acked.log", taskIndex, stage), "acked")
 
 	// Parse opType
 	switch strings.ToLower(opTypeStr) {
@@ -317,6 +398,74 @@ func main() {
 		Port:   port,
 	}
 
+	// Init processed, Stored, acked maps, Stored = processed from HyDFS
+	if exactlyOnce {
+		processedHyDFSLog := fmt.Sprintf("task_%d_stage_%d_processed.log", taskIndex, stage)
+		ackedHyDFSLog := fmt.Sprintf("task_%d_stage_%d_acked.log", taskIndex, stage)
+
+		req1 := GetHttpRequest{HyDFSFilename: processedHyDFSLog, LocalFilename: fmt.Sprintf("%s/%s", filesDir, processedHyDFSLog)}
+		_, err = SendPostRequest("/get", req1)
+		if err != nil {
+			log.Printf("[WARN] file not found in HyDFS: %s", processedHyDFSLog)
+		} else {
+			file, err := os.Open(fmt.Sprintf("%s/%s", filesDir, processedHyDFSLog))
+			if err != nil {
+				log.Printf("open processed log file error: %v", err)
+			} else {
+				scanner := bufio.NewScanner(file)
+				for scanner.Scan() {
+					line := scanner.Text()
+					parts := strings.SplitN(line, Delimiter, 2)
+					key := parts[0]
+					value := parts[1]
+
+					processed.Store(key, value)
+					Stored.Store(key, "")
+				}
+				file.Close()
+			}
+		}
+		req2 := GetHttpRequest{HyDFSFilename: ackedHyDFSLog, LocalFilename: fmt.Sprintf("%s/%s", filesDir, ackedHyDFSLog)}
+		_, err = SendPostRequest("/get", req2)
+		if err != nil {
+			log.Printf("[WARN] file not found in HyDFS: %s", ackedHyDFSLog)
+		} else {
+			file, err := os.Open(fmt.Sprintf("%s/%s", filesDir, ackedHyDFSLog))
+			if err != nil {
+				log.Printf("open acked log file error: %v", err)
+			} else {
+				scanner := bufio.NewScanner(file)
+				for scanner.Scan() {
+					key := scanner.Text()
+					acked.Store(key, "")
+				}
+				file.Close()
+			}
+		}
+		// Initialize processedButNotAcked
+		mu.Lock()
+		processed.Range(func(key, value any) bool {
+			k := key.(string)
+			v := value.(string)
+			if opPath == "../bin/filter" {
+				parts := strings.SplitN(v, Delimiter, 2)
+				result := parts[0]
+				value := parts[1]
+				_, isAcked := acked.Load(k)
+				if !isAcked && result == "PASS" {
+					processedButNotAcked[k] = value
+				}
+			} else {
+				_, isAcked := acked.Load(k)
+				if !isAcked {
+					processedButNotAcked[k] = v
+				}
+			}
+			return true
+		})
+		mu.Unlock()
+	}
+
 	// Listen for UDP messages
 	listenAddr, err := net.ResolveUDPAddr("udp", fmt.Sprintf(":%d", port))
 	if err != nil {
@@ -350,24 +499,118 @@ func main() {
 }
 
 func startOutputReader(stdoutPipe io.Reader) {
-	if opType == SinkOp {
-		sinkFlusher = NewHyDFSFlusher(5*time.Second, hydfsDestFile)
-	}
-	scanner := bufio.NewScanner(stdoutPipe)
-	for scanner.Scan() {
-		outputTuple := scanner.Text()
-		parts := strings.SplitN(outputTuple, delimiter, 2)
-		key := parts[0]
-		value := parts[1]
-		if exactlyOnce {
-			processed.Store(key, value)
+	if opType == SinkOp { // can't fail per spec
+		sinkFlusher = NewHyDFSFlusher(FlushInterval, hydfsDestFile, "sink")
+		scanner := bufio.NewScanner(stdoutPipe)
+		for scanner.Scan() {
+			outputTuple := scanner.Text()
+			if opPath != "../bin/filter" {
+				parts := strings.SplitN(outputTuple, Delimiter, 2)
+				key := parts[0]
+				value := parts[1]
+				processed.Store(key, value)
+				sinkFlusher.Append(outputTuple)
+			} else {
+				// for filter: outputTuple = key&PASS&value or key&FAIL&value
+				parts := strings.SplitN(outputTuple, Delimiter, 3)
+				key := parts[0]
+				result := parts[1]
+				value := parts[2]
+				processed.Store(key, fmt.Sprintf("%s%s%s", result, Delimiter, value))
+				if result == "PASS" {
+					sinkFlusher.Append(fmt.Sprintf("%s%s%s", key, Delimiter, value))
+				}
+			}
+
+			if opPath != "../bin/aggregate" {
+				// send ACK back to original sender of tuple
+				key := strings.SplitN(outputTuple, Delimiter, 2)[0]
+				targetAddrStr, ok := Received.Load(key)
+				if ok {
+					targetAddr, err := net.ResolveUDPAddr("udp", targetAddrStr.(string))
+					if err != nil {
+						log.Printf("resolve target addr error for ACK back to original sender: %v\n", err)
+						continue
+					}
+					payload := &AckPayload{Key: key}
+					payloadBytes, _ := json.Marshal(payload)
+					ackMsg := &Message{
+						MessageType: Ack,
+						From:        &SelfTask,
+						Payload:     payloadBytes,
+					}
+					sendUDP(targetAddr, ackMsg)
+					log.Printf("[INFO] Sent ACK for tuple key=%s to task %s\n", key, targetAddrStr.(string))
+				}
+			}
 		}
-		if opType == SinkOp {
-			sinkFlusher.Append(value)
+	} else {
+		if exactlyOnce {
+			processedFlusher := NewHyDFSFlusher(FlushInterval, fmt.Sprintf("task_%d_stage_%d_processed.log", taskIndex, stage), "processed")
+			scanner := bufio.NewScanner(stdoutPipe)
+			for scanner.Scan() {
+				outputTuple := scanner.Text()
+				parts := strings.SplitN(outputTuple, Delimiter, 2)
+				key := parts[0]
+				value := parts[1]
+				switch opPath {
+				case "../bin/transform", "../bin/identity", "../bin/aggregate":
+					processed.Store(key, value)
+					// sends tuple forward
+					mu.Lock()
+					processedButNotAcked[key] = value
+					mu.Unlock()
+					// stores in persistent storage and send ACK back
+					processedFlusher.Append(outputTuple)
+				case "../bin/filter":
+					// for filter: outputTuple = key&PASS&value or key&FAIL&value
+					parts := strings.SplitN(outputTuple, Delimiter, 3)
+					key := parts[0]
+					result := parts[1]
+					value := parts[2]
+					if result == "PASS" {
+						processed.Store(key, fmt.Sprintf("%s%s%s", result, Delimiter, value))
+						// sends tuple forward
+						mu.Lock()
+						processedButNotAcked[key] = value
+						mu.Unlock()
+						// stores in persistent storage and send ACK back
+						processedFlusher.Append(outputTuple)
+					} else { // FAIL
+						processed.Store(key, fmt.Sprintf("%s%s%s", result, Delimiter, value))
+						// don't send forward
+						// store in persistent storage and send ACK back
+						processedFlusher.Append(outputTuple)
+					}
+				}
+			}
 		} else {
-			mu.Lock()
-			processedButNotAcked[key] = value
-			mu.Unlock()
+			scanner := bufio.NewScanner(stdoutPipe)
+			for scanner.Scan() {
+				outputTuple := scanner.Text()
+				if opPath == "../bin/filter" {
+					// for filter: outputTuple = key&PASS&value or key&FAIL&value
+					parts := strings.SplitN(outputTuple, Delimiter, 3)
+					key := parts[0]
+					result := parts[1]
+					value := parts[2]
+					if result == "PASS" {
+						mu.Lock()
+						processedButNotAcked[key] = value
+						mu.Unlock()
+					} else {
+						// don't send forward
+					}
+				} else {
+					parts := strings.SplitN(outputTuple, Delimiter, 2)
+					key := parts[0]
+					value := parts[1]
+					// sends tuple forward
+					mu.Lock()
+					processedButNotAcked[key] = value
+					mu.Unlock()
+				}
+			}
 		}
 	}
 }
@@ -493,6 +736,3 @@ func streamTuples(interval time.Duration) {
 	}
 
 }
-
-// TODO: what to do if you are the source task
-// TODO: handle exactly-once semantics

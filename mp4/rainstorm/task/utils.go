@@ -1,9 +1,12 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"log"
+	"net"
 	"os"
+	"strings"
 	"sync"
 	"time"
 )
@@ -19,6 +22,7 @@ func AssignTask(stage int, taskIndex int, numTasks int) int {
 
 // to flush to HyDFS periodically
 type HyDFSFlusher struct {
+	flusherType   string // "processed" or "acked" or "sink"
 	mu            sync.Mutex
 	lines         []string
 	interval      time.Duration
@@ -26,11 +30,12 @@ type HyDFSFlusher struct {
 	created       bool
 }
 
-func NewHyDFSFlusher(interval time.Duration, hyDFSFilename string) *HyDFSFlusher {
+func NewHyDFSFlusher(interval time.Duration, hyDFSFilename string, flusherType string) *HyDFSFlusher {
 	f := &HyDFSFlusher{
 		lines:         make([]string, 0),
 		interval:      interval,
 		hyDFSFilename: hyDFSFilename,
+		flusherType:   flusherType,
 	}
 
 	filesDir := "/home/anandan3/g95/mp4/rainstorm/files"
@@ -98,9 +103,9 @@ func (f *HyDFSFlusher) flush() {
 }
 
 func (f *HyDFSFlusher) writeToFile(lines []string) {
-	filesDir := "/home/anandan3/g95/mp4/rainstorm/files"
+	tempDir := "/home/anandan3/g95/mp4/rainstorm/temp"
 
-	temp := fmt.Sprintf("%s/%s", filesDir, f.hyDFSFilename)
+	temp := fmt.Sprintf("%s/%s", tempDir, f.hyDFSFilename)
 	file, err := os.Create(temp) // overwrite file each flush
 	if err != nil {
 		log.Printf("Error creating file: %v", err)
@@ -108,8 +113,18 @@ func (f *HyDFSFlusher) writeToFile(lines []string) {
 	}
 	defer file.Close()
 
-	for _, line := range lines {
-		file.WriteString(line + "\n")
+	switch f.flusherType {
+	case "sink":
+		for _, line := range lines {
+			parts := strings.SplitN(line, Delimiter, 2)
+			// key := parts[0]
+			value := parts[1]
+			file.WriteString(value + "\n")
+		}
+	case "processed", "acked":
+		for _, line := range lines {
+			file.WriteString(line + "\n")
+		}
 	}
 
 	// Post to HyDFS
@@ -117,5 +132,33 @@ func (f *HyDFSFlusher) writeToFile(lines []string) {
 	_, err = SendPostRequest("/append", req)
 	if err != nil {
 		log.Printf("error posting to HyDFS: %v", err)
+		return
+	}
+
+	if f.flusherType == "processed" {
+		// record as stored and send ACK back
+		for _, line := range lines {
+			parts := strings.SplitN(line, Delimiter, 2)
+			key := parts[0]
+			Stored.Store(key, "")
+
+			targetAddrStr, ok := Received.Load(key)
+			if ok {
+				targetAddr, err := net.ResolveUDPAddr("udp", targetAddrStr.(string))
+				if err != nil {
+					log.Printf("resolve target addr error for ACK after storing log: %v\n", err)
+					continue
+				}
+				payload := &AckPayload{Key: key}
+				payloadBytes, _ := json.Marshal(payload)
+				ackMsg := &Message{
+					MessageType: Ack,
+					From:        &SelfTask,
+					Payload:     payloadBytes,
+				}
+				sendUDP(targetAddr, ackMsg)
+				log.Printf("[INFO] Sent ACK for tuple key=%s to task %s\n", key, targetAddrStr.(string))
+			}
+		}
 	}
 }

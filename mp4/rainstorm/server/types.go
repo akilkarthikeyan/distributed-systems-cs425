@@ -23,6 +23,8 @@ const (
 	SpawnTaskResponse MessageType = "spawn_task_response"
 	StartTransfer     MessageType = "startTransfer"
 	ChangeTransfer    MessageType = "changeTransfer"
+	StopTransfer      MessageType = "stopTransfer"
+	Terminate         MessageType = "terminate"
 	HeartBeat         MessageType = "heartbeat"
 )
 
@@ -112,6 +114,11 @@ type SpawnTaskResponsePayload struct {
 
 type TransferPayload struct {
 	Successors map[int]Process `json:"successors"`
+}
+
+type TerminatePayload struct {
+	Stage     int `json:"stage"`
+	TaskIndex int `json:"taskIndex"`
 }
 
 // Global state for this process

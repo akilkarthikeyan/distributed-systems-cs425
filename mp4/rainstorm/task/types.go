@@ -20,6 +20,8 @@ const (
 	HeartBeat      MessageType = "heartbeat"
 	StartTransfer  MessageType = "startTransfer"
 	ChangeTransfer MessageType = "changeTransfer"
+	StopTransfer   MessageType = "stopTransfer"
+	Terminate      MessageType = "terminate"
 	Tuple          MessageType = "tuple"
 	Ack            MessageType = "ack"
 )
@@ -58,6 +60,11 @@ type HeartBeatPayload struct {
 
 type TransferPayload struct {
 	Successors map[int]Process `json:"successors"`
+}
+
+type TerminatePayload struct {
+	Stage     int `json:"stage"`
+	TaskIndex int `json:"taskIndex"`
 }
 
 type TuplePayload struct {

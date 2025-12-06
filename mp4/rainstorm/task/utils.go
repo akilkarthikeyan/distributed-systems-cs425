@@ -38,11 +38,8 @@ func NewHyDFSFlusher(interval time.Duration, hyDFSFilename string, flusherType s
 		flusherType:   flusherType,
 	}
 
-	filesDir := "/home/anandan3/g95/mp4/rainstorm/files"
-	temp := fmt.Sprintf("%s/%s", filesDir, hyDFSFilename)
+	temp := fmt.Sprintf("%s/%s", Dir, hyDFSFilename)
 
-	// Create an empty file locally so you can send it
-	os.MkdirAll(filesDir, 0755) // creates directories if missing
 	os.WriteFile(temp, []byte{}, 0644)
 
 	// POST /create
@@ -103,9 +100,7 @@ func (f *HyDFSFlusher) flush() {
 }
 
 func (f *HyDFSFlusher) writeToFile(lines []string) {
-	tempDir := "/home/anandan3/g95/mp4/rainstorm/temp"
-
-	temp := fmt.Sprintf("%s/%s", tempDir, f.hyDFSFilename)
+	temp := fmt.Sprintf("%s/%s", Dir, f.hyDFSFilename)
 	file, err := os.Create(temp) // overwrite file each flush
 	if err != nil {
 		log.Printf("Error creating file: %v", err)

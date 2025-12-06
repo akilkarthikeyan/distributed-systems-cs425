@@ -20,6 +20,7 @@ var udpConn *net.UDPConn
 var portList []int
 var portMutex sync.Mutex
 var tasksMu sync.RWMutex
+var terminatedTaskCount sync.Map // stage -> count of terminated tasks
 
 const taskExePath = "../bin/task"
 
@@ -200,12 +201,50 @@ func handleMessage(msg *Message, encoder *json.Encoder) { // encoder can only be
 		}
 		encoder.Encode(respMsg)
 
+	// TCP message
+	case Terminate:
+		var payload TerminatePayload
+		json.Unmarshal(msg.Payload, &payload)
+
+		val, _ := terminatedTaskCount.LoadOrStore(payload.Stage, 0)
+		count := val.(int) + 1
+		terminatedTaskCount.Store(payload.Stage, count)
+
+		tasksMu.Lock()
+		tasksByStage, exists := Tasks[payload.Stage]
+		tasksMu.Unlock()
+
+		// for Autoscale, once source terminates, turn autoscale off
+
+		if exists && count == len(tasksByStage) { // all tasks in this stage have terminated
+			// If this is not the last stage, send StopTransfer to next stage tasks
+			if payload.Stage < Nstages {
+				tasksMu.RLock()
+				nextStageTasks := Tasks[payload.Stage+1]
+				tasksMu.RUnlock()
+
+				stopTransferMsg := &Message{
+					MessageType: StopTransfer,
+					From:        &SelfNode,
+				}
+
+				for _, taskInfo := range nextStageTasks {
+					taskAddr := fmt.Sprintf("%s:%d", taskInfo.IP, taskInfo.Port)
+					sendTCP(taskAddr, stopTransferMsg)
+					log.Printf("[INFO] sent StopTransfer to stage %d task %d at %s\n", payload.Stage+1, taskInfo.TaskIndex, taskAddr)
+				}
+			} else {
+				log.Printf("[END] RainStorm ended successfully!\n")
+			}
+		}
+
 	default:
 		fmt.Printf("unknown message type: %s\n", msg.MessageType)
 	}
 }
 
 func startRainStorm() {
+	log.Printf("[START] starting RainStorm with %d stages and %d tasks per stage\n", Nstages, NtasksPerStage)
 	// Spawn tasks
 	for stage := 0; stage < Nstages; stage++ {
 		// Stage 0 tasks are actually Stage 1 tasks, because Stage 0 is the separate source task
@@ -338,6 +377,7 @@ func startRainStorm() {
 			if err != nil {
 				fmt.Printf("TCP starttransfer to %s error: %v\n", taskAddr, err)
 			}
+			log.Printf("[INFO] sent startTransfer to stage %d task %d at %s\n", stage, taskIndex, taskAddr)
 		}
 	}
 
@@ -370,6 +410,7 @@ func startRainStorm() {
 	if err != nil {
 		fmt.Printf("TCP starttransfer to sourceTask error: %v\n", err)
 	}
+	log.Printf("[INFO] sent startTransfer to source task at %s\n", sourceTaskAddr)
 }
 
 func handleCommand(fields []string) {
@@ -600,7 +641,7 @@ func tick(interval time.Duration) { // maintains time, respawns tasks if needed
 
 		failed := make([]TaskInfo, 0, len(toRespawn))
 		for _, taskInfo := range toRespawn {
-			log.Printf("[FAIL] stage %d task %d at node %s pid %d failed\n", taskInfo.Stage, taskInfo.TaskIndex, taskInfo.NodeIP, taskInfo.PID)
+			log.Printf("[FAIL] stage %d task %d address %s:%d pid %d failed\n", taskInfo.Stage, taskInfo.TaskIndex, taskInfo.IP, taskInfo.Port, taskInfo.PID)
 
 			opPath := OpPaths[taskInfo.Stage-1]
 			opArgs := OpArgsList[taskInfo.Stage-1]
@@ -682,6 +723,7 @@ func tick(interval time.Duration) { // maintains time, respawns tasks if needed
 					if err != nil {
 						fmt.Printf("TCP starttransfer to %s error: %v\n", taskAddr, err)
 					}
+					log.Printf("[INFO] sent startTransfer to stage %d task %d at %s\n", taskInfo.Stage, taskInfo.TaskIndex, taskAddr)
 				}
 			}
 			// also have to update successors of previous stage tasks,
@@ -710,6 +752,7 @@ func tick(interval time.Duration) { // maintains time, respawns tasks if needed
 					if err != nil {
 						fmt.Printf("TCP changetransfer to %s error: %v\n", taskAddr, err)
 					}
+					log.Printf("[INFO] sent changeTransfer to stage %d task %d at %s\n", taskInfo.Stage, taskInfo.TaskIndex, taskAddr)
 				}
 			}
 		}(failed)
@@ -724,10 +767,6 @@ func taskInfoMapToProcessMap(m map[int]TaskInfo) map[int]Process {
 	return out
 }
 
-// TODO: make sure all send and receives are logged in server.go and task.go
-// TODO: add ../bin/transform, ../bin/filter and ../bin/aggregate !!!
-// TODO: make sure temp and files are used properly and cleaned up !!!
-// TODO: add END logic after everything has been ACKed to kill the tasks and send aggregate task results !!!
 // TODO: delete logs from HyDFS after run? so next run is clean
 // TODO: do autoscaling logic !!!
 // TODO: implement list_tasks, kill_task

@@ -58,7 +58,8 @@ var (
 
 	IsSourceDone atomic.Bool // to indicate source task is done sending tuples
 
-	Dir string
+	Dir          string
+	rainstormRun string // identifier for rainstorm run
 )
 
 const Delimiter = "&"
@@ -302,7 +303,6 @@ func handleMessage(msg *Message, encoder *json.Encoder) {
 				}
 			} else {
 				// process
-				Received.Store(payload.Key, GetProcessAddress(msg.From))
 				tuple := fmt.Sprintf("%s%s%s", payload.Key, Delimiter, payload.Value)
 				processTuple(tuple, inputWriter)
 			}
@@ -355,26 +355,13 @@ func handleMessage(msg *Message, encoder *json.Encoder) {
 func main() {
 	pid := os.Getpid()
 
-	logFile := fmt.Sprintf("../logs/task_%d.log", pid)
-	os.MkdirAll("../logs", 0755)
-
-	Dir = fmt.Sprintf("/home/anandan3/g95/mp4/rainstorm/temp/task_%d", pid)
-	os.MkdirAll(Dir, 0755)
-
-	f, err := os.OpenFile(logFile, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
-	if err != nil {
-		// fmt.Printf("log file open error: %v", err)
-		return
-	}
-	defer f.Close()
-	log.SetOutput(f)
-
 	flag.StringVar(&opPath, "opPath", "", "Path to the external op_exe executable.")
 	flag.StringVar(&opArgsString, "opArgs", "", "Space-separated arguments for the op_exe.")
 	flag.StringVar(&opTypeStr, "opType", "", "Type of operator (Source, Filter, Sink, etc.).")
 
 	flag.IntVar(&stage, "stage", 0, "Stage number of this task.")
 	flag.IntVar(&taskIndex, "taskIndex", 0, "Task index within the stage.")
+	flag.StringVar(&rainstormRun, "runId", "", "Unique identifier for the RainStorm run.")
 
 	flag.IntVar(&inputRate, "inputRate", -1, "Input rate (default is -1).")
 
@@ -391,11 +378,25 @@ func main() {
 
 	flag.Parse()
 
+	logFile := fmt.Sprintf("../logs/%s_task_%d.log", rainstormRun, pid)
+	os.MkdirAll("../logs", 0755)
+
+	Dir = fmt.Sprintf("/home/anandan3/g95/mp4/rainstorm/temp/%s_task_%d", rainstormRun, pid)
+	os.MkdirAll(Dir, 0755)
+
+	f, err := os.OpenFile(logFile, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
+	if err != nil {
+		// fmt.Printf("log file open error: %v", err)
+		return
+	}
+	defer f.Close()
+	log.SetOutput(f)
+
 	// Initialize processedButNotAcked !!!
 	processedButNotAcked = make(map[string]string)
 
 	if exactlyOnce {
-		ackedFlusher = NewHyDFSFlusher(FlushInterval, fmt.Sprintf("task_%d_stage_%d_acked.log", taskIndex, stage), "acked")
+		ackedFlusher = NewHyDFSFlusher(FlushInterval, fmt.Sprintf("%s_task_%d_stage_%d_acked.log", rainstormRun, taskIndex, stage), "acked")
 	}
 
 	// Parse opType
@@ -441,8 +442,8 @@ func main() {
 
 	// Init processed, Stored, acked maps, Stored = processed from HyDFS
 	if exactlyOnce {
-		processedHyDFSLog := fmt.Sprintf("task_%d_stage_%d_processed.log", taskIndex, stage)
-		ackedHyDFSLog := fmt.Sprintf("task_%d_stage_%d_acked.log", taskIndex, stage)
+		processedHyDFSLog := fmt.Sprintf("%s_task_%d_stage_%d_processed.log", rainstormRun, taskIndex, stage)
+		ackedHyDFSLog := fmt.Sprintf("%s_task_%d_stage_%d_acked.log", rainstormRun, taskIndex, stage)
 
 		req1 := GetHttpRequest{HyDFSFilename: processedHyDFSLog, LocalFilename: fmt.Sprintf("%s/%s", Dir, processedHyDFSLog)}
 		_, err = SendPostRequest("/get", req1)
@@ -591,7 +592,7 @@ func startOutputReader(stdoutPipe io.Reader) {
 		}
 	} else {
 		if exactlyOnce {
-			processedFlusher := NewHyDFSFlusher(FlushInterval, fmt.Sprintf("task_%d_stage_%d_processed.log", taskIndex, stage), "processed")
+			processedFlusher := NewHyDFSFlusher(FlushInterval, fmt.Sprintf("%s_task_%d_stage_%d_processed.log", rainstormRun, taskIndex, stage), "processed")
 			scanner := bufio.NewScanner(stdoutPipe)
 			for scanner.Scan() {
 				outputTuple := scanner.Text()
@@ -645,6 +646,24 @@ func startOutputReader(stdoutPipe io.Reader) {
 						mu.Unlock()
 					} else {
 						// don't send forward
+						// but send ACK
+						targetAddrStr, ok := Received.Load(key)
+						if ok {
+							targetAddr, err := net.ResolveUDPAddr("udp", targetAddrStr.(string))
+							if err != nil {
+								log.Printf("resolve target addr error for ACK back to original sender: %v\n", err)
+								continue
+							}
+							payload := &AckPayload{Key: key}
+							payloadBytes, _ := json.Marshal(payload)
+							ackMsg := &Message{
+								MessageType: Ack,
+								From:        &SelfTask,
+								Payload:     payloadBytes,
+							}
+							sendUDP(targetAddr, ackMsg)
+							log.Printf("[INFO] sent ACK for tuple key=%s to task %s\n", key, targetAddrStr.(string))
+						}
 					}
 				} else {
 					parts := strings.SplitN(outputTuple, Delimiter, 2)
@@ -754,7 +773,7 @@ func forwardTuples(interval time.Duration) {
 				Payload:     payloadBytes,
 			}
 
-			idx := AssignTask(stage, taskIndex, len(successors))
+			idx := AssignTask(key, len(successors))
 			successor, found := successors[idx]
 			if found {
 				targetAddr, err := net.ResolveUDPAddr("udp", GetProcessAddress(&successor))

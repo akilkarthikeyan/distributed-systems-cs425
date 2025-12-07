@@ -20,7 +20,7 @@ var udpConn *net.UDPConn
 var portList []int
 var portMutex sync.Mutex
 var tasksMu sync.RWMutex
-var terminatedTaskCount sync.Map // stage -> count of terminated tasks
+var rainStormRun string // identifier for rainstorm run
 
 const taskExePath = "../bin/task"
 
@@ -165,6 +165,7 @@ func handleMessage(msg *Message, encoder *json.Encoder) { // encoder can only be
 			"--opType", payload.OpType,
 			"--stage", fmt.Sprintf("%d", payload.Stage),
 			"--taskIndex", fmt.Sprintf("%d", payload.TaskIndex),
+			"--runId", rainStormRun,
 			// boolean flags
 			"--autoscaleEnabled=" + fmt.Sprintf("%t", payload.AutoScaleEnabled),
 			"--exactlyOnce=" + fmt.Sprintf("%t", payload.ExactlyOnce),
@@ -206,17 +207,33 @@ func handleMessage(msg *Message, encoder *json.Encoder) { // encoder can only be
 		var payload TerminatePayload
 		json.Unmarshal(msg.Payload, &payload)
 
-		val, _ := terminatedTaskCount.LoadOrStore(payload.Stage, 0)
-		count := val.(int) + 1
-		terminatedTaskCount.Store(payload.Stage, count)
-
+		// Delete the terminated task from the stage
 		tasksMu.Lock()
 		tasksByStage, exists := Tasks[payload.Stage]
+		if exists {
+			delete(tasksByStage, payload.TaskIndex)
+			Tasks[payload.Stage] = tasksByStage
+		}
 		tasksMu.Unlock()
+
+		// Check if all tasks in this stage have terminated
+		tasksMu.RLock()
+		tasksByStage, exists = Tasks[payload.Stage]
+		numTasksRemaining := 0
+		if exists {
+			numTasksRemaining = len(tasksByStage)
+		}
+		tasksMu.RUnlock()
+
+		// Send ACK back dumbo
+		encoder.Encode(&Message{
+			MessageType: Ack,
+			From:        &SelfNode,
+		})
 
 		// for Autoscale, once source terminates, turn autoscale off
 
-		if exists && count == len(tasksByStage) { // all tasks in this stage have terminated
+		if numTasksRemaining == 0 { // all tasks in this stage have terminated
 			// If this is not the last stage, send StopTransfer to next stage tasks
 			if payload.Stage < Nstages {
 				tasksMu.RLock()
@@ -234,7 +251,7 @@ func handleMessage(msg *Message, encoder *json.Encoder) { // encoder can only be
 					log.Printf("[INFO] sent StopTransfer to stage %d task %d at %s\n", payload.Stage+1, taskInfo.TaskIndex, taskAddr)
 				}
 			} else {
-				log.Printf("[END] RainStorm ended successfully!\n")
+				log.Printf("[END] RainStorm run %s ended successfully!\n", rainStormRun)
 			}
 		}
 
@@ -244,7 +261,10 @@ func handleMessage(msg *Message, encoder *json.Encoder) { // encoder can only be
 }
 
 func startRainStorm() {
-	log.Printf("[START] starting RainStorm with %d stages and %d tasks per stage\n", Nstages, NtasksPerStage)
+	rainStormRun = GenerateRunID()
+
+	log.Printf("[START] starting RainStorm run %s with %d stages and %d tasks per stage\n", rainStormRun, Nstages, NtasksPerStage)
+
 	// Spawn tasks
 	for stage := 0; stage < Nstages; stage++ {
 		// Stage 0 tasks are actually Stage 1 tasks, because Stage 0 is the separate source task
@@ -263,6 +283,7 @@ func startRainStorm() {
 				TaskIndex:        taskIndex,
 				AutoScaleEnabled: AutoScaleEnabled,
 				ExactlyOnce:      ExactlyOnce,
+				RunID:            rainStormRun,
 			}
 			if stage == Nstages-1 {
 				reqPayload.HyDFSDestFile = HyDFSDestFile
@@ -310,6 +331,7 @@ func startRainStorm() {
 		TaskIndex:       0,
 		HyDFSSourceFile: HyDFSSourceFile,
 		InputRate:       InputRate,
+		RunID:           rainStormRun,
 	}
 	payloadBytes, _ := json.Marshal(reqPayload)
 	reqMsg := &Message{
@@ -653,6 +675,7 @@ func tick(interval time.Duration) { // maintains time, respawns tasks if needed
 				TaskIndex:        taskInfo.TaskIndex,
 				AutoScaleEnabled: AutoScaleEnabled,
 				ExactlyOnce:      ExactlyOnce,
+				RunID:            rainStormRun,
 			}
 
 			if taskInfo.TaskType == SinkOp {

@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"hash/fnv"
 	"log"
 	"net"
 	"os"
@@ -15,9 +16,11 @@ func GetProcessAddress(node *Process) string {
 	return fmt.Sprintf("%s:%d", node.IP, node.Port)
 }
 
-func AssignTask(stage int, taskIndex int, numTasks int) int {
-	hashValue := stage*31 + taskIndex
-	return hashValue % numTasks
+func AssignTask(key string, numTasks int) int {
+	h := fnv.New32a()
+	h.Write([]byte(key))
+	hashValue := h.Sum32()
+	return int(hashValue) % numTasks
 }
 
 // to flush to HyDFS periodically

@@ -101,6 +101,7 @@ type SpawnTaskRequestPayload struct {
 	ExactlyOnce      bool   `json:"exactlyOnce,omitempty"`
 	LW               int    `json:"lw,omitempty"`
 	HW               int    `json:"hw,omitempty"`
+	RunID            string `json:"runId,omitempty"` // for unique HyDFS files
 }
 
 type SpawnTaskResponsePayload struct {

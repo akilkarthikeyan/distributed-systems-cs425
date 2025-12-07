@@ -54,8 +54,9 @@ type Message struct {
 }
 
 type HeartBeatPayload struct {
-	Stage     int `json:"stage"`
-	TaskIndex int `json:"taskIndex"`
+	Stage           int `json:"stage"`
+	TaskIndex       int `json:"taskIndex"`
+	TuplesPerSecond int `json:"tuplesPerSecond,omitempty"`
 }
 
 type TransferPayload struct {

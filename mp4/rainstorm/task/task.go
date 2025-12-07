@@ -60,6 +60,8 @@ var (
 
 	Dir          string
 	rainstormRun string // identifier for rainstorm run
+
+	tuplesThisSecond atomic.Int64
 )
 
 const Delimiter = "&"
@@ -226,6 +228,7 @@ func handleMessage(msg *Message, encoder *json.Encoder) {
 
 	// UDP message
 	case Tuple:
+		tuplesThisSecond.Add(1)
 		var payload TuplePayload
 		json.Unmarshal(msg.Payload, &payload)
 
@@ -694,14 +697,15 @@ func heartbeat(interval time.Duration) {
 		return
 	}
 
-	heartBeatPayload := HeartBeatPayload{
-		Stage:     stage,
-		TaskIndex: taskIndex,
-	}
-	payloadBytes, _ := json.Marshal(heartBeatPayload)
+	for range ticker.C {
+		count := tuplesThisSecond.Swap(0)
+		heartBeatPayload := HeartBeatPayload{
+			Stage:           stage,
+			TaskIndex:       taskIndex,
+			TuplesPerSecond: int(count),
+		}
+		payloadBytes, _ := json.Marshal(heartBeatPayload)
 
-	for {
-		<-ticker.C
 		msg := &Message{
 			MessageType: HeartBeat,
 			From:        &SelfTask,

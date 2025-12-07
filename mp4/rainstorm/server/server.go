@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 )
 
@@ -20,7 +21,11 @@ var udpConn *net.UDPConn
 var portList []int
 var portMutex sync.Mutex
 var tasksMu sync.RWMutex
+var stageRatesMu sync.RWMutex
 var rainStormRun string // identifier for rainstorm run
+
+var tickDone chan struct{}
+var autoscaleDone chan struct{}
 
 const taskExePath = "../bin/task"
 
@@ -126,20 +131,41 @@ func handleMessage(msg *Message, encoder *json.Encoder) { // encoder can only be
 	case HeartBeat:
 		var payload HeartBeatPayload
 		json.Unmarshal(msg.Payload, &payload)
-		tasksMu.Lock()
-		tasksByStage, exists := Tasks[payload.Stage]
-		if !exists {
+
+		if !AutoScaleEnabled {
+			tasksMu.Lock()
+			tasksByStage, exists := Tasks[payload.Stage]
+			if !exists {
+				tasksMu.Unlock()
+				return
+			}
+			taskInfo, exists := tasksByStage[payload.TaskIndex]
+			if !exists {
+				tasksMu.Unlock()
+				return
+			}
+			taskInfo.LastUpdated = Tick
+			Tasks[payload.Stage][payload.TaskIndex] = taskInfo
 			tasksMu.Unlock()
-			return
+		} else {
+			stageRatesMu.Lock()
+			if StageInputRates[payload.Stage] == nil {
+				StageInputRates[payload.Stage] = make(map[int]*InputRateData)
+			}
+			if StageInputRates[payload.Stage][payload.TaskIndex] == nil {
+				StageInputRates[payload.Stage][payload.TaskIndex] = &InputRateData{
+					rates: make([]int, 3),
+				}
+			}
+
+			data := StageInputRates[payload.Stage][payload.TaskIndex]
+			data.rates[data.index] = payload.TuplesPerSecond
+			data.index = (data.index + 1) % 3
+			if data.count < 3 {
+				data.count++
+			}
+			stageRatesMu.Unlock()
 		}
-		taskInfo, exists := tasksByStage[payload.TaskIndex]
-		if !exists {
-			tasksMu.Unlock()
-			return
-		}
-		taskInfo.LastUpdated = Tick
-		Tasks[payload.Stage][payload.TaskIndex] = taskInfo
-		tasksMu.Unlock()
 
 	// TCP message
 	case Join: // will recv join if you are the leader
@@ -232,6 +258,46 @@ func handleMessage(msg *Message, encoder *json.Encoder) { // encoder can only be
 		})
 
 		// for Autoscale, once source terminates, turn autoscale off
+		if payload.Stage == 0 && !ExactlyOnce {
+			if AutoScaleEnabled && autoscaleDone != nil {
+				close(autoscaleDone)
+			}
+			if !AutoScaleEnabled && tickDone != nil {
+				close(tickDone)
+			}
+
+			// kill all tasks (lowkey can do this in exactly once too)
+			go func() {
+				time.Sleep(500 * time.Millisecond)
+
+				tasksMu.RLock()
+				allTasks := make([]TaskInfo, 0)
+				for stage := 1; stage <= Nstages; stage++ {
+					for _, taskInfo := range Tasks[stage] {
+						allTasks = append(allTasks, taskInfo)
+					}
+				}
+				tasksMu.RUnlock()
+
+				for _, taskInfo := range allTasks {
+					killPayload := KillPayload{
+						PID: taskInfo.PID,
+					}
+					payloadBytes, _ := json.Marshal(killPayload)
+					killMsg := &Message{
+						MessageType: Kill,
+						From:        &SelfNode,
+						Payload:     payloadBytes,
+					}
+					nodeAddr := fmt.Sprintf("%s:%d", taskInfo.NodeIP, taskInfo.NodePort)
+					sendTCP(nodeAddr, killMsg)
+				}
+
+				log.Printf("[END] RainStorm run %s ended successfully!\n", rainStormRun)
+			}()
+
+			return
+		}
 
 		if numTasksRemaining == 0 { // all tasks in this stage have terminated
 			// If this is not the last stage, send StopTransfer to next stage tasks
@@ -252,8 +318,38 @@ func handleMessage(msg *Message, encoder *json.Encoder) { // encoder can only be
 				}
 			} else {
 				log.Printf("[END] RainStorm run %s ended successfully!\n", rainStormRun)
+
+				if !AutoScaleEnabled && tickDone != nil {
+					close(tickDone)
+				}
 			}
 		}
+
+	// TCP message
+	case Kill:
+		var payload KillPayload
+		json.Unmarshal(msg.Payload, &payload)
+
+		var ackPayload AckPayload
+
+		// Kill the process with SIGKILL
+		err := syscall.Kill(payload.PID, syscall.SIGKILL)
+		if err != nil {
+			fmt.Printf("kill process %d error: %v\n", payload.PID, err)
+			// send ACK with success=false
+			ackPayload.Success = false
+		} else {
+			// send ACK with success=true
+			ackPayload.Success = true
+			log.Printf("[KILL] killed process with PID %d\n", payload.PID)
+		}
+		payloadBytes, _ := json.Marshal(ackPayload)
+		ackMsg := &Message{
+			MessageType: Ack,
+			From:        &SelfNode,
+			Payload:     payloadBytes,
+		}
+		encoder.Encode(ackMsg)
 
 	default:
 		fmt.Printf("unknown message type: %s\n", msg.MessageType)
@@ -536,6 +632,22 @@ func handleCommand(fields []string) {
 			}
 			idx++
 		}
+
+		if ExactlyOnce && AutoScaleEnabled {
+			fmt.Println("ERROR: ExactlyOnce and AutoScaleEnabled cannot both be true")
+			return
+		}
+
+		if AmILeader {
+			if !AutoScaleEnabled {
+				tickDone = make(chan struct{})
+				go tick(TimeUnit)
+			} else {
+				autoscaleDone = make(chan struct{})
+				go autoscale(AutoscaleInterval)
+			}
+		}
+
 		go startRainStorm()
 
 	default:
@@ -571,6 +683,7 @@ func main() {
 
 	// Initialize top-level map
 	Tasks = make(map[int]map[int]TaskInfo)
+	StageInputRates = make(map[int]map[int]*InputRateData) // Add this line
 
 	// Add yourself to list of nodes
 	SelfNode = Process{
@@ -622,10 +735,6 @@ func main() {
 		log.Printf("[INFO] sent %s to %s\n", joinMsg.MessageType, leaderAddr)
 	}
 
-	if AmILeader {
-		go tick(TimeUnit)
-	}
-
 	reader := bufio.NewScanner(os.Stdin)
 	printUsage()
 
@@ -648,137 +757,393 @@ func tick(interval time.Duration) { // maintains time, respawns tasks if needed
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
-	for range ticker.C {
-		Tick++
-		toRespawn := make([]TaskInfo, 0)
-		tasksMu.RLock()
-		for _, tasksByStage := range Tasks {
-			for _, taskInfo := range tasksByStage {
-				if Tick-taskInfo.LastUpdated > Tfail {
-					toRespawn = append(toRespawn, taskInfo)
+	for {
+		select {
+		case <-tickDone:
+			return
+		case <-ticker.C:
+			Tick++
+			toRespawn := make([]TaskInfo, 0)
+			tasksMu.RLock()
+			for _, tasksByStage := range Tasks {
+				for _, taskInfo := range tasksByStage {
+					if Tick-taskInfo.LastUpdated > Tfail {
+						toRespawn = append(toRespawn, taskInfo)
+					}
 				}
 			}
-		}
-		tasksMu.RUnlock()
+			tasksMu.RUnlock()
 
-		failed := make([]TaskInfo, 0, len(toRespawn))
-		for _, taskInfo := range toRespawn {
-			log.Printf("[FAIL] stage %d task %d address %s:%d pid %d failed\n", taskInfo.Stage, taskInfo.TaskIndex, taskInfo.IP, taskInfo.Port, taskInfo.PID)
+			failed := make([]TaskInfo, 0, len(toRespawn))
+			for _, taskInfo := range toRespawn {
+				log.Printf("[FAIL] stage %d task %d address %s:%d pid %d failed\n", taskInfo.Stage, taskInfo.TaskIndex, taskInfo.IP, taskInfo.Port, taskInfo.PID)
 
-			opPath := OpPaths[taskInfo.Stage-1]
-			opArgs := OpArgsList[taskInfo.Stage-1]
-			reqPayload := SpawnTaskRequestPayload{
-				OpPath:           opPath,
-				OpArgs:           opArgs,
-				OpType:           string(taskInfo.TaskType),
-				Stage:            taskInfo.Stage,
-				TaskIndex:        taskInfo.TaskIndex,
-				AutoScaleEnabled: AutoScaleEnabled,
-				ExactlyOnce:      ExactlyOnce,
-				RunID:            rainStormRun,
+				opPath := OpPaths[taskInfo.Stage-1]
+				opArgs := OpArgsList[taskInfo.Stage-1]
+				reqPayload := SpawnTaskRequestPayload{
+					OpPath:           opPath,
+					OpArgs:           opArgs,
+					OpType:           string(taskInfo.TaskType),
+					Stage:            taskInfo.Stage,
+					TaskIndex:        taskInfo.TaskIndex,
+					AutoScaleEnabled: AutoScaleEnabled,
+					ExactlyOnce:      ExactlyOnce,
+					RunID:            rainStormRun,
+				}
+
+				if taskInfo.TaskType == SinkOp {
+					reqPayload.HyDFSDestFile = HyDFSDestFile
+				}
+				if AutoScaleEnabled {
+					reqPayload.LW = LW
+					reqPayload.HW = HW
+				}
+
+				payloadBytes, _ := json.Marshal(reqPayload)
+				reqMsg := &Message{
+					MessageType: SpawnTaskRequest,
+					From:        &SelfNode,
+					Payload:     payloadBytes,
+				}
+				targetNode := Nodes[AssignNode(taskInfo.Stage, taskInfo.TaskIndex, len(Nodes))]
+				response, _ := sendTCP(GetProcessAddress(&targetNode), reqMsg)
+				var respPayload SpawnTaskResponsePayload
+				json.Unmarshal(response.Payload, &respPayload)
+
+				newInfo := TaskInfo{
+					Stage:       taskInfo.Stage,
+					TaskIndex:   taskInfo.TaskIndex,
+					PID:         respPayload.PID,
+					TaskType:    taskInfo.TaskType,
+					IP:          respPayload.IP,
+					Port:        respPayload.Port,
+					NodeIP:      targetNode.IP,
+					NodePort:    targetNode.Port,
+					LastUpdated: Tick,
+				}
+
+				tasksMu.Lock()
+				if Tasks[taskInfo.Stage] == nil {
+					Tasks[taskInfo.Stage] = make(map[int]TaskInfo)
+				}
+				Tasks[taskInfo.Stage][taskInfo.TaskIndex] = newInfo
+				tasksMu.Unlock()
+
+				log.Printf("[INFO] respawned %s task stage %d index %d at %s:%d with pid %d\n", reqPayload.OpType, reqPayload.Stage, reqPayload.TaskIndex, respPayload.IP, respPayload.Port, respPayload.PID)
+
+				failed = append(failed, newInfo)
 			}
 
-			if taskInfo.TaskType == SinkOp {
-				reqPayload.HyDFSDestFile = HyDFSDestFile
-			}
-			if AutoScaleEnabled {
-				reqPayload.LW = LW
-				reqPayload.HW = HW
+			if len(failed) == 0 {
+				continue
 			}
 
-			payloadBytes, _ := json.Marshal(reqPayload)
-			reqMsg := &Message{
-				MessageType: SpawnTaskRequest,
-				From:        &SelfNode,
-				Payload:     payloadBytes,
-			}
-			targetNode := Nodes[AssignNode(taskInfo.Stage, taskInfo.TaskIndex, len(Nodes))]
-			response, _ := sendTCP(GetProcessAddress(&targetNode), reqMsg)
-			var respPayload SpawnTaskResponsePayload
-			json.Unmarshal(response.Payload, &respPayload)
-
-			newInfo := TaskInfo{
-				Stage:       taskInfo.Stage,
-				TaskIndex:   taskInfo.TaskIndex,
-				PID:         respPayload.PID,
-				TaskType:    taskInfo.TaskType,
-				IP:          respPayload.IP,
-				Port:        respPayload.Port,
-				NodeIP:      targetNode.IP,
-				NodePort:    targetNode.Port,
-				LastUpdated: Tick,
-			}
-
-			tasksMu.Lock()
-			if Tasks[taskInfo.Stage] == nil {
-				Tasks[taskInfo.Stage] = make(map[int]TaskInfo)
-			}
-			Tasks[taskInfo.Stage][taskInfo.TaskIndex] = newInfo
-			tasksMu.Unlock()
-
-			log.Printf("[INFO] respawned %s task stage %d index %d at %s:%d with pid %d\n", reqPayload.OpType, reqPayload.Stage, reqPayload.TaskIndex, respPayload.IP, respPayload.Port, respPayload.PID)
-
-			failed = append(failed, newInfo)
-		}
-
-		if len(failed) == 0 {
-			continue
-		}
-
-		// send startTransfer to respawned tasks
-		go func(failed []TaskInfo) {
-			// sleep a bit to allow tasks to be ready
-			time.Sleep(1 * time.Second)
-			for _, taskInfo := range failed {
-				if taskInfo.Stage < Nstages {
+			// send startTransfer to respawned tasks
+			go func(failed []TaskInfo) {
+				// sleep a bit to allow tasks to be ready
+				time.Sleep(1 * time.Second)
+				for _, taskInfo := range failed {
+					if taskInfo.Stage < Nstages {
+						tasksMu.RLock()
+						successors := taskInfoMapToProcessMap(Tasks[taskInfo.Stage+1])
+						tasksMu.RUnlock()
+						transferPayload := TransferPayload{Successors: successors}
+						payloadBytes, _ := json.Marshal(transferPayload)
+						transferMsg := &Message{
+							MessageType: StartTransfer,
+							From:        &SelfNode,
+							Payload:     payloadBytes,
+						}
+						taskAddr := fmt.Sprintf("%s:%d", taskInfo.IP, taskInfo.Port)
+						_, err := sendTCP(taskAddr, transferMsg)
+						if err != nil {
+							fmt.Printf("TCP starttransfer to %s error: %v\n", taskAddr, err)
+						}
+						log.Printf("[INFO] sent startTransfer to stage %d task %d at %s\n", taskInfo.Stage, taskInfo.TaskIndex, taskAddr)
+					}
+				}
+				// also have to update successors of previous stage tasks,
+				// get a list of all stages that had failed tasks
+				updatedStages := make(map[int]bool)
+				for _, taskInfo := range failed {
+					if taskInfo.Stage > 0 {
+						updatedStages[taskInfo.Stage-1] = true
+					}
+				}
+				for stage := range updatedStages {
 					tasksMu.RLock()
-					successors := taskInfoMapToProcessMap(Tasks[taskInfo.Stage+1])
+					successors := taskInfoMapToProcessMap(Tasks[stage+1])
+					stageTasks := Tasks[stage]
 					tasksMu.RUnlock()
 					transferPayload := TransferPayload{Successors: successors}
 					payloadBytes, _ := json.Marshal(transferPayload)
 					transferMsg := &Message{
-						MessageType: StartTransfer,
+						MessageType: ChangeTransfer,
 						From:        &SelfNode,
 						Payload:     payloadBytes,
 					}
-					taskAddr := fmt.Sprintf("%s:%d", taskInfo.IP, taskInfo.Port)
-					_, err := sendTCP(taskAddr, transferMsg)
-					if err != nil {
-						fmt.Printf("TCP starttransfer to %s error: %v\n", taskAddr, err)
+					for _, taskInfo := range stageTasks {
+						taskAddr := fmt.Sprintf("%s:%d", taskInfo.IP, taskInfo.Port)
+						_, err := sendTCP(taskAddr, transferMsg)
+						if err != nil {
+							fmt.Printf("TCP changetransfer to %s error: %v\n", taskAddr, err)
+						}
+						log.Printf("[INFO] sent changeTransfer to stage %d task %d at %s\n", taskInfo.Stage, taskInfo.TaskIndex, taskAddr)
 					}
-					log.Printf("[INFO] sent startTransfer to stage %d task %d at %s\n", taskInfo.Stage, taskInfo.TaskIndex, taskAddr)
 				}
-			}
-			// also have to update successors of previous stage tasks,
-			// get a list of all stages that had failed tasks
-			updatedStages := make(map[int]bool)
-			for _, taskInfo := range failed {
-				if taskInfo.Stage > 0 {
-					updatedStages[taskInfo.Stage-1] = true
+			}(failed)
+		}
+	}
+}
+
+func autoscale(interval time.Duration) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-autoscaleDone:
+			return
+		case <-ticker.C:
+			Tick++
+
+			// Calculate average input rate per stage and make scaling decisions
+			for stage := 1; stage <= Nstages; stage++ {
+				stageRatesMu.RLock()
+				taskRates := StageInputRates[stage]
+				if taskRates == nil {
+					stageRatesMu.RUnlock()
+					continue
 				}
-			}
-			for stage := range updatedStages {
+
+				totalRate := 0
+				taskCount := 0
+
+				for _, data := range taskRates {
+					if data.count > 0 {
+						sum := 0
+						for i := 0; i < data.count; i++ {
+							sum += data.rates[i]
+						}
+						avgRate := sum / data.count
+						totalRate += avgRate
+						taskCount++
+					}
+				}
+				stageRatesMu.RUnlock()
+
+				if taskCount == 0 {
+					continue
+				}
+
+				avgRatePerTask := totalRate / taskCount
+				log.Printf("[AUTOSCALE] Stage %d: avg rate per task = %d tuples/sec (LW=%d, HW=%d, tasks=%d)\n",
+					stage, avgRatePerTask, LW, HW, taskCount)
+				fmt.Printf("[AUTOSCALE] Stage %d: avg rate per task = %d tuples/sec (LW=%d, HW=%d, tasks=%d)\n",
+					stage, avgRatePerTask, LW, HW, taskCount)
+
 				tasksMu.RLock()
-				successors := taskInfoMapToProcessMap(Tasks[stage+1])
-				stageTasks := Tasks[stage]
+				currentTasks := Tasks[stage]
+				currentTaskCount := len(currentTasks)
 				tasksMu.RUnlock()
-				transferPayload := TransferPayload{Successors: successors}
-				payloadBytes, _ := json.Marshal(transferPayload)
-				transferMsg := &Message{
-					MessageType: ChangeTransfer,
-					From:        &SelfNode,
-					Payload:     payloadBytes,
-				}
-				for _, taskInfo := range stageTasks {
-					taskAddr := fmt.Sprintf("%s:%d", taskInfo.IP, taskInfo.Port)
-					_, err := sendTCP(taskAddr, transferMsg)
-					if err != nil {
-						fmt.Printf("TCP changetransfer to %s error: %v\n", taskAddr, err)
+
+				// Scale down: avgRatePerTask < LW and more than 1 task
+				if avgRatePerTask < LW && currentTaskCount > 1 {
+					log.Printf("[AUTOSCALE] Stage %d scaling DOWN (removing 1 task)\n", stage)
+					fmt.Printf("[AUTOSCALE] Stage %d scaling DOWN (removing 1 task)\n", stage)
+
+					// Pick a task to kill (highest index)
+					victimTaskIndex := -1
+					var victimTask TaskInfo
+					tasksMu.RLock()
+					for idx, task := range currentTasks {
+						if idx > victimTaskIndex {
+							victimTaskIndex = idx
+							victimTask = task
+						}
 					}
-					log.Printf("[INFO] sent changeTransfer to stage %d task %d at %s\n", taskInfo.Stage, taskInfo.TaskIndex, taskAddr)
+					tasksMu.RUnlock()
+
+					if victimTaskIndex == -1 {
+						continue
+					}
+
+					// Remove from Tasks and StageInputRates immediately
+					tasksMu.Lock()
+					delete(Tasks[stage], victimTaskIndex)
+					tasksMu.Unlock()
+
+					stageRatesMu.Lock()
+					delete(StageInputRates[stage], victimTaskIndex)
+					stageRatesMu.Unlock()
+
+					go func(stage int, victimTask TaskInfo, victimTaskIndex int) {
+						killPayload := KillPayload{
+							PID: victimTask.PID,
+						}
+						payloadBytes, _ := json.Marshal(killPayload)
+						killMsg := &Message{
+							MessageType: Kill,
+							From:        &SelfNode,
+							Payload:     payloadBytes,
+						}
+						nodeAddr := fmt.Sprintf("%s:%d", victimTask.NodeIP, victimTask.NodePort)
+						_, err := sendTCP(nodeAddr, killMsg)
+						if err != nil {
+							log.Printf("[ERROR] failed to send kill to %s: %v\n", nodeAddr, err)
+						} else {
+							log.Printf("[AUTOSCALE] Killed stage %d task %d (PID %d)\n", stage, victimTaskIndex, victimTask.PID)
+						}
+
+						// Update predecessors' successors
+						time.Sleep(500 * time.Millisecond)
+
+						tasksMu.RLock()
+						successors := taskInfoMapToProcessMap(Tasks[stage])
+						prevStageTasks := Tasks[stage-1]
+						tasksMu.RUnlock()
+
+						transferPayload := TransferPayload{Successors: successors}
+						payloadBytes, _ = json.Marshal(transferPayload)
+						changeMsg := &Message{
+							MessageType: ChangeTransfer,
+							From:        &SelfNode,
+							Payload:     payloadBytes,
+						}
+
+						for _, taskInfo := range prevStageTasks {
+							taskAddr := fmt.Sprintf("%s:%d", taskInfo.IP, taskInfo.Port)
+							sendTCP(taskAddr, changeMsg)
+							log.Printf("[INFO] sent ChangeTransfer to stage %d task %d at %s\n",
+								stage-1, taskInfo.TaskIndex, taskAddr)
+						}
+					}(stage, victimTask, victimTaskIndex)
+
+					// Scale up: avgRatePerTask > HW
+				} else if avgRatePerTask > HW {
+					log.Printf("[AUTOSCALE] Stage %d scaling UP (adding 1 task)\n", stage)
+					fmt.Printf("[AUTOSCALE] Stage %d scaling UP (adding 1 task)\n", stage)
+
+					// Find next available task index
+					tasksMu.RLock()
+					newTaskIndex := 0
+					for idx := range currentTasks {
+						if idx >= newTaskIndex {
+							newTaskIndex = idx + 1
+						}
+					}
+					tasksMu.RUnlock()
+
+					// Spawn new task
+					opPath := OpPaths[stage-1]
+					opArgs := OpArgsList[stage-1]
+					opType := OtherOp
+					if stage == Nstages {
+						opType = SinkOp
+					}
+
+					reqPayload := SpawnTaskRequestPayload{
+						OpPath:           opPath,
+						OpArgs:           opArgs,
+						OpType:           string(opType),
+						Stage:            stage,
+						TaskIndex:        newTaskIndex,
+						AutoScaleEnabled: AutoScaleEnabled,
+						ExactlyOnce:      ExactlyOnce,
+						LW:               LW,
+						HW:               HW,
+						RunID:            rainStormRun,
+					}
+
+					if opType == SinkOp {
+						reqPayload.HyDFSDestFile = HyDFSDestFile
+					}
+
+					payloadBytes, _ := json.Marshal(reqPayload)
+					reqMsg := &Message{
+						MessageType: SpawnTaskRequest,
+						From:        &SelfNode,
+						Payload:     payloadBytes,
+					}
+
+					targetNode := Nodes[AssignNode(stage, newTaskIndex, len(Nodes))]
+					response, err := sendTCP(GetProcessAddress(&targetNode), reqMsg)
+					if err != nil {
+						log.Printf("[ERROR] failed to spawn task: %v\n", err)
+						continue
+					}
+
+					var respPayload SpawnTaskResponsePayload
+					json.Unmarshal(response.Payload, &respPayload)
+
+					newTaskInfo := TaskInfo{
+						Stage:       stage,
+						TaskIndex:   newTaskIndex,
+						PID:         respPayload.PID,
+						TaskType:    opType,
+						IP:          respPayload.IP,
+						Port:        respPayload.Port,
+						NodeIP:      targetNode.IP,
+						NodePort:    targetNode.Port,
+						LastUpdated: Tick, // don't really use this in autoscale
+					}
+
+					tasksMu.Lock()
+					Tasks[stage][newTaskIndex] = newTaskInfo
+					tasksMu.Unlock()
+
+					log.Printf("[AUTOSCALE] Spawned new stage %d task %d at %s:%d with PID %d\n",
+						stage, newTaskIndex, respPayload.IP, respPayload.Port, respPayload.PID)
+					fmt.Printf("[AUTOSCALE] Spawned new stage %d task %d at %s:%d with PID %d\n",
+						stage, newTaskIndex, respPayload.IP, respPayload.Port, respPayload.PID)
+
+					// Send StartTransfer and update predecessors in goroutine
+					go func(stage int, newTaskInfo TaskInfo) {
+						time.Sleep(1 * time.Second)
+
+						// Send successors to new task
+						if stage < Nstages {
+							tasksMu.RLock()
+							successors := taskInfoMapToProcessMap(Tasks[stage+1])
+							tasksMu.RUnlock()
+
+							transferPayload := TransferPayload{Successors: successors}
+							payloadBytes, _ := json.Marshal(transferPayload)
+							transferMsg := &Message{
+								MessageType: StartTransfer,
+								From:        &SelfNode,
+								Payload:     payloadBytes,
+							}
+							taskAddr := fmt.Sprintf("%s:%d", newTaskInfo.IP, newTaskInfo.Port)
+							sendTCP(taskAddr, transferMsg)
+							log.Printf("[INFO] sent StartTransfer to stage %d task %d at %s\n",
+								stage, newTaskInfo.TaskIndex, taskAddr)
+						}
+
+						// Update predecessors' successors
+						tasksMu.RLock()
+						successors := taskInfoMapToProcessMap(Tasks[stage])
+						prevStageTasks := Tasks[stage-1]
+						tasksMu.RUnlock()
+
+						transferPayload := TransferPayload{Successors: successors}
+						payloadBytes, _ := json.Marshal(transferPayload)
+						changeMsg := &Message{
+							MessageType: ChangeTransfer,
+							From:        &SelfNode,
+							Payload:     payloadBytes,
+						}
+
+						for _, taskInfo := range prevStageTasks {
+							taskAddr := fmt.Sprintf("%s:%d", taskInfo.IP, taskInfo.Port)
+							sendTCP(taskAddr, changeMsg)
+							log.Printf("[INFO] sent ChangeTransfer to stage %d task %d at %s\n",
+								stage-1, taskInfo.TaskIndex, taskAddr)
+						}
+					}(stage, newTaskInfo)
 				}
 			}
-		}(failed)
+		}
 	}
 }
 
@@ -790,6 +1155,5 @@ func taskInfoMapToProcessMap(m map[int]TaskInfo) map[int]Process {
 	return out
 }
 
-// TODO: delete logs from HyDFS after run? so next run is clean
-// TODO: do autoscaling logic !!!
 // TODO: implement list_tasks, kill_task
+// TODO: beautify autoscale outputs to console (also say how many tasks in each stage blah blah)

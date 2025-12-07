@@ -258,15 +258,12 @@ func handleMessage(msg *Message, encoder *json.Encoder) { // encoder can only be
 		})
 
 		// for Autoscale, once source terminates, turn autoscale off
-		if payload.Stage == 0 && !ExactlyOnce {
-			if AutoScaleEnabled && autoscaleDone != nil {
+		if payload.Stage == 0 && AutoScaleEnabled {
+			if autoscaleDone != nil {
 				close(autoscaleDone)
 			}
-			if !AutoScaleEnabled && tickDone != nil {
-				close(tickDone)
-			}
 
-			// kill all tasks (lowkey can do this in exactly once too)
+			// kill all tasks
 			go func() {
 				time.Sleep(500 * time.Millisecond)
 

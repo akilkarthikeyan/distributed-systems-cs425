@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math"
 	"net"
 	"os"
 	"os/exec"
@@ -297,7 +298,18 @@ func handleMessage(msg *Message, encoder *json.Encoder) {
 				} else {
 					_, isProcessed := processed.Load(payload.Key)
 					if isProcessed {
-						// do nothing
+						// has been processed, will be stored and acked soon (i.e if it is not a sink)
+						// if it is a sink, send ACK back
+						if opType == SinkOp {
+							payload := AckPayload{Key: payload.Key}
+							payloadBytes, _ := json.Marshal(payload)
+							ackMsg := &Message{
+								MessageType: Ack,
+								From:        &SelfTask,
+								Payload:     payloadBytes,
+							}
+							sendUDP(targetAddr, ackMsg)
+						}
 					} else {
 						// process
 						tuple := fmt.Sprintf("%s%s%s", payload.Key, Delimiter, payload.Value)
@@ -380,6 +392,8 @@ func main() {
 	flag.BoolVar(&exactlyOnce, "exactlyOnce", false, "Flag to enable exactly-once processing.")
 
 	flag.Parse()
+
+	inputRate = int(math.Ceil(float64(inputRate) / 10.0)) // per 100ms
 
 	logFile := fmt.Sprintf("../logs/%s_task_%d.log", rainstormRun, pid)
 	os.MkdirAll("../logs", 0755)

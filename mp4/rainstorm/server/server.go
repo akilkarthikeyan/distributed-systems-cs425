@@ -647,6 +647,54 @@ func handleCommand(fields []string) {
 
 		go startRainStorm()
 
+	case "kill_task":
+		if len(fields) != 3 {
+			fmt.Println("Usage: kill_task <VM> <PID>")
+			return
+		}
+		vmAddr := fields[1] // in format IP:Port
+		pid, err := strconv.Atoi(fields[2])
+		if err != nil {
+			fmt.Println("ERROR:", err)
+			return
+		}
+
+		killPayload := KillPayload{
+			PID: pid,
+		}
+		payloadBytes, _ := json.Marshal(killPayload)
+		killMsg := &Message{
+			MessageType: Kill,
+			From:        &SelfNode,
+			Payload:     payloadBytes,
+		}
+		_, err = sendTCP(vmAddr, killMsg)
+		if err != nil {
+			fmt.Printf("send kill to %s error: %v\n", vmAddr, err)
+			return
+		}
+		fmt.Printf("Sent kill for PID %d to %s\n", pid, vmAddr)
+
+	case "list_tasks":
+		tasksMu.RLock()
+		for stage := 0; stage <= Nstages; stage++ {
+			if Tasks[stage] == nil {
+				continue
+			}
+			fmt.Printf("Stage %d:\n", stage)
+			for idx, t := range Tasks[stage] {
+				opExe := "source"
+				if stage >= 1 && stage-1 < len(OpPaths) {
+					opExe = OpPaths[stage-1]
+				}
+				logPath := fmt.Sprintf("../logs/%s_task_%d.log", rainStormRun, t.PID)
+				fmt.Printf("  Task %d: VM=%s:%d PID=%d op=%s log=%s\n",
+					idx, t.NodeIP, t.NodePort, t.PID, opExe, logPath)
+			}
+			fmt.Println()
+		}
+		tasksMu.RUnlock()
+
 	default:
 		fmt.Println("Unknown command:", command)
 		return
@@ -654,10 +702,11 @@ func handleCommand(fields []string) {
 }
 
 func printUsage() {
-	fmt.Println("Enter commands")
-	fmt.Println("\nAvailable commands:")
-	fmt.Println("  rainstorm <Nstages> <Ntasks> <op1_exe> <op1_numargs> <op1_arg1> <op1_arg2> ... <op2_exe> <op2_numargs> <op2_arg1> ... <hydfs_source_file> <hydfs_dest_file> <exactly_once> <autoscale_enabled> <input_rate> [<lw> <hw>]")
-	fmt.Print(">> ")
+	fmt.Println("Available commands:")
+	fmt.Println("  1. rainstorm <Nstages> <Ntasks> <op1_exe> <op1_numargs> <op1_arg1> <op1_arg2> ... <op2_exe> <op2_numargs> <op2_arg1> ... <hydfs_source_file> <hydfs_dest_file> <exactly_once> <autoscale_enabled> <input_rate> [<lw> <hw>]")
+	fmt.Println("  2. kill_task <VM> <PID>")
+	fmt.Println("  3. list_tasks")
+	fmt.Println()
 }
 
 func main() {
@@ -742,7 +791,7 @@ func main() {
 		if len(fields) > 0 {
 			handleCommand(fields)
 		}
-		fmt.Print(">> ")
+		// fmt.Print(">> ")
 	}
 
 	if err := reader.Err(); err != nil && err != io.EOF {
@@ -904,6 +953,13 @@ func autoscale(interval time.Duration) {
 		case <-ticker.C:
 			Tick++
 
+			// Print summary header
+			tasksMu.RLock()
+			stage0Count := len(Tasks[0])
+			tasksMu.RUnlock()
+			fmt.Println("---------AutoScale Summary---------")
+			fmt.Printf("Stage 0 tasks: %d\n", stage0Count)
+
 			// Calculate average input rate per stage and make scaling decisions
 			for stage := 1; stage <= Nstages; stage++ {
 				stageRatesMu.RLock()
@@ -936,13 +992,14 @@ func autoscale(interval time.Duration) {
 				avgRatePerTask := totalRate / taskCount
 				log.Printf("[AUTOSCALE] Stage %d: avg rate per task = %d tuples/sec (LW=%d, HW=%d, tasks=%d)\n",
 					stage, avgRatePerTask, LW, HW, taskCount)
-				fmt.Printf("[AUTOSCALE] Stage %d: avg rate per task = %d tuples/sec (LW=%d, HW=%d, tasks=%d)\n",
-					stage, avgRatePerTask, LW, HW, taskCount)
 
 				tasksMu.RLock()
 				currentTasks := Tasks[stage]
 				currentTaskCount := len(currentTasks)
 				tasksMu.RUnlock()
+
+				// Print per-stage summary (stdout only)
+				fmt.Printf("Stage %d tasks: %d, avg rate per task: %d tuple/sec (LW=%d, HW=%d)\n", stage, currentTaskCount, avgRatePerTask, LW, HW)
 
 				// Scale down: avgRatePerTask < LW and more than 1 task
 				if avgRatePerTask < LW && currentTaskCount > 1 {
@@ -1140,6 +1197,7 @@ func autoscale(interval time.Duration) {
 					}(stage, newTaskInfo)
 				}
 			}
+			fmt.Println("---------End of Summary---------")
 		}
 	}
 }

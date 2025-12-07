@@ -9,9 +9,9 @@ const (
 	LeaderHost        = "fa25-cs425-9501.cs.illinois.edu"
 	LeaderPort        = 9000
 	HeartBeatTimeUnit = time.Second
-	ForwardTimeUnit   = 4 * time.Second
-	FlushInterval     = 2 * time.Second
-	StreamTimeUnit    = time.Second // for source stream
+	ForwardTimeUnit   = 2 * time.Second
+	FlushInterval     = 1 * time.Second
+	StreamTimeUnit    = 100 * time.Millisecond // for source stream
 )
 
 type MessageType string

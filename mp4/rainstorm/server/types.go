@@ -9,7 +9,7 @@ const (
 	SelfPort          = 9000
 	LeaderHost        = "fa25-cs425-9501.cs.illinois.edu"
 	LeaderPort        = 9000
-	Tfail             = 5
+	Tfail             = 3
 	TimeUnit          = time.Second
 	AutoscaleInterval = 3 * time.Second // spec said within 5 seconds
 )

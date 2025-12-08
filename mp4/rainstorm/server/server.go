@@ -191,7 +191,7 @@ func handleMessage(msg *Message, encoder *json.Encoder) { // encoder can only be
 			"--opType", payload.OpType,
 			"--stage", fmt.Sprintf("%d", payload.Stage),
 			"--taskIndex", fmt.Sprintf("%d", payload.TaskIndex),
-			"--runId", rainStormRun,
+			"--runId", payload.RunID,
 			// boolean flags
 			"--autoscaleEnabled=" + fmt.Sprintf("%t", payload.AutoScaleEnabled),
 			"--exactlyOnce=" + fmt.Sprintf("%t", payload.ExactlyOnce),

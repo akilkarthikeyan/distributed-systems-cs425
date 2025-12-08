@@ -14,7 +14,7 @@ func AssignNode(stage int, taskIndex int, numNodes int) int {
 }
 
 func GenerateRunID() string {
-	const charset = "abcdefghijklmnopqrstuvwxyz0123456789"
+	const charset = "abcdefghijklmnopqrstuvwxyz"
 	b := make([]byte, 5)
 	for i := range b {
 		b[i] = charset[rand.IntN(len(charset))]

@@ -12,6 +12,7 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -24,7 +25,8 @@ var udpConn *net.UDPConn
 var (
 	// Configuration flags
 	opPath       string
-	opArgsString string // Holds the single string from --opArgs
+	opArgsString string   // Holds the single string from --opArgs
+	opArgsSlice  []string // Holds the split arguments
 	opTypeStr    string
 	opType       OpType
 
@@ -427,7 +429,7 @@ func main() {
 	}
 
 	if opType != SourceOp {
-		opArgsSlice := strings.Fields(opArgsString)
+		opArgsSlice = strings.Fields(opArgsString)
 
 		cmd := exec.Command(opPath, opArgsSlice...)
 
@@ -790,8 +792,20 @@ func forwardTuples(interval time.Duration) {
 				From:        &SelfTask,
 				Payload:     payloadBytes,
 			}
+			var idx int
 
-			idx := AssignTask(key, len(successors))
+			if opPath == "../bin/filter" && len(opArgsSlice) == 2 {
+				n, _ := strconv.Atoi(opArgsSlice[1])
+				fields := strings.Split(value, ",")
+				if n > 0 && n <= len(fields) {
+					keyField := fields[n-1] // Convert to 0-based index
+					idx = AssignTask(keyField, len(successors))
+				} else {
+					idx = AssignTask(key, len(successors))
+				}
+			} else {
+				idx = AssignTask(key, len(successors))
+			}
 			successor, found := successors[idx]
 			if found {
 				targetAddr, err := net.ResolveUDPAddr("udp", GetProcessAddress(&successor))

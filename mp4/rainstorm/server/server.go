@@ -456,7 +456,7 @@ func startRainStorm() {
 
 	log.Printf("[INFO] spawned %s task stage %d index %d at %s:%d with pid %d\n", reqPayload.OpType, 0, 0, respPayload.IP, respPayload.Port, respPayload.PID)
 
-	time.Sleep(1 * time.Second) // wait a bit for tasks to be ready
+	time.Sleep(2 * time.Second) // wait a bit for tasks to be ready
 
 	// Spawning over, now send successor info and start tasks, do this in reverse
 	for stage := Nstages; stage >= 1; stage-- {

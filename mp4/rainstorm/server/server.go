@@ -124,7 +124,9 @@ func handleTCPClient(conn net.Conn) {
 }
 
 func handleMessage(msg *Message, encoder *json.Encoder) { // encoder can only be present for TCP messages
-	log.Printf("[INFO] recv %s from %s %s\n", msg.MessageType, msg.From.WhoAmI, GetProcessAddress(msg.From))
+	if msg.MessageType != HeartBeat {
+		log.Printf("[INFO] recv %s from %s %s\n", msg.MessageType, msg.From.WhoAmI, GetProcessAddress(msg.From))
+	}
 
 	switch msg.MessageType {
 	// UDP message

@@ -538,6 +538,12 @@ func handleCommand(fields []string) {
 
 	switch command {
 	case "rainstorm":
+		OpPaths = OpPaths[:0]
+		OpArgsList = OpArgsList[:0]
+		StageInputRates = make(map[int]map[int]*InputRateData)
+		Tasks = make(map[int]map[int]TaskInfo)
+		Tick = 0
+
 		// check if leader
 		if SelfHost != LeaderHost || SelfPort != LeaderPort {
 			fmt.Println("ERROR: Only the leader can handle rainstorm commands")

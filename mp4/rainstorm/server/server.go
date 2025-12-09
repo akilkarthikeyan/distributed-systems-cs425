@@ -956,11 +956,11 @@ func autoscale(interval time.Duration) {
 			Tick++
 
 			// Print summary header
-			tasksMu.RLock()
-			stage0Count := len(Tasks[0])
-			tasksMu.RUnlock()
-			fmt.Println("---------AutoScale Summary---------")
-			fmt.Printf("Stage 0 tasks: %d\n", stage0Count)
+			// tasksMu.RLock()
+			// stage0Count := len(Tasks[0])
+			// tasksMu.RUnlock()
+			// fmt.Println("---------AutoScale Summary---------")
+			// fmt.Printf("Stage 0 tasks: %d\n", stage0Count)
 
 			// Calculate average input rate per stage and make scaling decisions
 			for stage := 1; stage <= Nstages; stage++ {
@@ -1001,12 +1001,12 @@ func autoscale(interval time.Duration) {
 				tasksMu.RUnlock()
 
 				// Print per-stage summary (stdout only)
-				fmt.Printf("Stage %d tasks: %d, avg rate per task: %d tuple/sec (LW=%d, HW=%d)\n", stage, currentTaskCount, avgRatePerTask, LW, HW)
+				// fmt.Printf("Stage %d tasks: %d, avg rate per task: %d tuple/sec (LW=%d, HW=%d)\n", stage, currentTaskCount, avgRatePerTask, LW, HW)
 
 				// Scale down: avgRatePerTask < LW and more than 1 task
 				if avgRatePerTask < LW && currentTaskCount > 1 {
 					log.Printf("[AUTOSCALE] Stage %d scaling DOWN (removing 1 task)\n", stage)
-					fmt.Printf("[AUTOSCALE] Stage %d scaling DOWN (removing 1 task)\n", stage)
+					// fmt.Printf("[AUTOSCALE] Stage %d scaling DOWN (removing 1 task)\n", stage)
 
 					// Pick a task to kill (highest index)
 					victimTaskIndex := -1
@@ -1078,7 +1078,7 @@ func autoscale(interval time.Duration) {
 					// Scale up: avgRatePerTask > HW
 				} else if avgRatePerTask > HW {
 					log.Printf("[AUTOSCALE] Stage %d scaling UP (adding 1 task)\n", stage)
-					fmt.Printf("[AUTOSCALE] Stage %d scaling UP (adding 1 task)\n", stage)
+					// fmt.Printf("[AUTOSCALE] Stage %d scaling UP (adding 1 task)\n", stage)
 
 					// Find next available task index
 					tasksMu.RLock()
@@ -1150,8 +1150,8 @@ func autoscale(interval time.Duration) {
 
 					log.Printf("[AUTOSCALE] Spawned new stage %d task %d at %s:%d with PID %d\n",
 						stage, newTaskIndex, respPayload.IP, respPayload.Port, respPayload.PID)
-					fmt.Printf("[AUTOSCALE] Spawned new stage %d task %d at %s:%d with PID %d\n",
-						stage, newTaskIndex, respPayload.IP, respPayload.Port, respPayload.PID)
+					// fmt.Printf("[AUTOSCALE] Spawned new stage %d task %d at %s:%d with PID %d\n",
+					// 	stage, newTaskIndex, respPayload.IP, respPayload.Port, respPayload.PID)
 
 					// Send StartTransfer and update predecessors in goroutine
 					go func(stage int, newTaskInfo TaskInfo) {
@@ -1199,7 +1199,7 @@ func autoscale(interval time.Duration) {
 					}(stage, newTaskInfo)
 				}
 			}
-			fmt.Println("---------End of Summary---------")
+			// fmt.Println("---------End of Summary---------")
 		}
 	}
 }

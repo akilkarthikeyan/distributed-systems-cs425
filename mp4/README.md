@@ -2,15 +2,13 @@
 
 ## 1) Bring up your VMs
 - Start as many VMs as you want in the cluster.
-- Ensure passwordless SSH between them (recommended).
 
 ## 2) Start HyDFS
-On the HyDFS master:
+Start HyDFS on every macine:
 ```bash
-cd /path/to/hydfs
+cd ~/g95/mp3
 go run .
 ```
-(Adjust per your HyDFS setup.)
 
 ## 3) Start the RainStorm server on each VM
 On every VM:
@@ -33,10 +31,10 @@ rainstorm <Nstages> <NtasksPerStage> \
 Example (2 stages, 1 task each, filter -> aggregate):
 ```bash
 rainstorm 2 1 \
-  ../bin/filter 2 1 PASS \
-  ../bin/aggregate 0 \
+  ../bin/filter 2 D3-1 9 \
+  ../bin/aggregate 1 9 \
   edges.txt result.txt \
-  true false 100000
+  true false 100
 ```
 - `exactly_once`: true/false
 - `autoscale_enabled`: true/false (cannot be true when exactly_once is true)
@@ -54,13 +52,27 @@ kill_task <VM:Port> <PID>
 ```
 - Logs:
   - Server: `../logs/server.log`
-  - Tasks: `../logs/<runId>_task_<pid>.log`
+  - Tasks: `../logs/<runId>_task_<taskno>_stage_<stageno>_<processed|acked>.log`
 
 ## 6) Cleanup
-- Temp data per task: `/home/anandan3/g95/mp4/rainstorm/temp/<runId>_task_<pid>`
-- Logs: `../logs/`
-- Use your existing `build.sh` to clean logs/temp if needed.
+- Use `build.sh` to clean logs/temp if needed.
 
-Notes:
-- For autoscaling runs, the autoscale loop starts automatically; for non-autoscale, the tick loop starts automatically.
-- Source task uses `input_rate` and streams from the HyDFS source file; sink writes to the HyDFS dest file.
+# Post-demo Debug
+
+So our main problem during the demo was that rainstorm did not work correctly for consecutive runs but worked for the first run.
+
+We made the following commits after demo to fix the problem:
+1. https://gitlab.engr.illinois.edu/akshatg4/g95/-/commit/5b9f8d5f9ba0053ed9bbf7f5173c73dd0b3a4355 (Fix issue with rainstormRunId parsing)
+2. https://gitlab.engr.illinois.edu/akshatg4/g95/-/commit/6cb49eaf5c4fdf5853ab7a6939f8f1a0afa73767 (Reset and clear global variables so that args are updated for new run)
+
+These were both super small fixes and we are sorry we didn't test RainStorm rigorously and fix this prior to the demo.
+
+Also, these 2 commits for my video demo to go smoothly:
+1. https://gitlab.engr.illinois.edu/akshatg4/g95/-/commit/5500f3b5f63ed08ed7817ecdc8df24eb64b0beda (Remove heartbeat from server log to see other logs clearly)
+2. https://gitlab.engr.illinois.edu/akshatg4/g95/-/commit/b7ccea2cc17e03711df5e6a66979f83756e3f477 (Remove autoscale print from terminal so that I can do list_tasks for autoscale)
+
+Miscellaneous:
+1. https://gitlab.engr.illinois.edu/akshatg4/g95/-/commit/8508153f1625049794a45f090ac3f786b040f9fa (README.md)
+2. https://gitlab.engr.illinois.edu/akshatg4/g95/-/commit/8085fae30baacf7eec5a9fd191ddbd9dee93d082 (README.md)
+
+[This](https://drive.google.com/drive/folders/1IPDaVtdtgiayHgd3YVCTCN2uIoWCukxv?usp=sharing) google drive folder has the video and Test 1 (runId: ktyfp) and Test 2 (runId: axjbx) HyDFS logs and server log (log at leader). HyDFS logs for Test 1 and Test 2 are logs for the filter stage (source stage and aggregate stage don't write logs because we assumed they don't fail).

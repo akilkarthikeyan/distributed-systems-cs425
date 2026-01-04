@@ -62,17 +62,18 @@ kill_task <VM:Port> <PID>
 So our main problem during the demo was that rainstorm did not work correctly for consecutive runs but worked for the first run.
 
 We made the following commits after demo to fix the problem:
-1. https://gitlab.engr.illinois.edu/akshatg4/g95/-/commit/5b9f8d5f9ba0053ed9bbf7f5173c73dd0b3a4355 (Fix issue with rainstormRunId parsing)
-2. https://gitlab.engr.illinois.edu/akshatg4/g95/-/commit/6cb49eaf5c4fdf5853ab7a6939f8f1a0afa73767 (Reset and clear global variables so that args are updated for new run)
+1. https://github.com/akilkarthikeyan/cs425/commit/5b9f8d5f9ba0053ed9bbf7f5173c73dd0b3a4355 (Fix issue with rainstormRunId parsing)
+2. https://github.com/akilkarthikeyan/cs425/commit/6cb49eaf5c4fdf5853ab7a6939f8f1a0afa73767 (Reset and clear global variables so that args are updated for new run)
 
 These were both super small fixes and we are sorry we didn't test RainStorm rigorously and fix this prior to the demo.
 
 Also, these 2 commits for my video demo to go smoothly:
-1. https://gitlab.engr.illinois.edu/akshatg4/g95/-/commit/5500f3b5f63ed08ed7817ecdc8df24eb64b0beda (Remove heartbeat from server log to see other logs clearly)
-2. https://gitlab.engr.illinois.edu/akshatg4/g95/-/commit/b7ccea2cc17e03711df5e6a66979f83756e3f477 (Remove autoscale print from terminal so that I can do list_tasks for autoscale)
+1. https://github.com/akilkarthikeyan/cs425/commit/5500f3b5f63ed08ed7817ecdc8df24eb64b0beda (Remove heartbeat from server log to see other logs clearly)
+2. https://github.com/akilkarthikeyan/cs425/commit/b7ccea2cc17e03711df5e6a66979f83756e3f477 (Remove autoscale print from terminal so that I can do list_tasks for autoscale)
 
 Miscellaneous:
-1. https://gitlab.engr.illinois.edu/akshatg4/g95/-/commit/8508153f1625049794a45f090ac3f786b040f9fa (README.md)
-2. https://gitlab.engr.illinois.edu/akshatg4/g95/-/commit/8085fae30baacf7eec5a9fd191ddbd9dee93d082 (README.md)
+1. https://github.com/akilkarthikeyan/cs425/commit/6cd59a7689e2a9ea5176780398583351f42416c5 (README.md)
+2. https://github.com/akilkarthikeyan/cs425/commit/8508153f1625049794a45f090ac3f786b040f9fa (README.md)
 
 [This](https://drive.google.com/drive/folders/1IPDaVtdtgiayHgd3YVCTCN2uIoWCukxv?usp=sharing) google drive folder has the video and Test 1 (runId: ktyfp) and Test 2 (runId: axjbx) HyDFS logs and server log (log at leader). HyDFS logs for Test 1 and Test 2 are logs for the filter stage (source stage and aggregate stage don't write logs because we assumed they don't fail).
+
